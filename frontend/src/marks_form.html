@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Enter New Marks - The Scholastic Architect</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Manrope:wght@600;700;800&amp;family=Inter:wght@400;500;600&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    colors: {
+                        "on-primary-fixed-variant": "#004395",
+                        "primary-container": "#2170e4",
+                        "surface-container-highest": "#e1e2ec",
+                        "on-primary-container": "#fefcff",
+                        "on-primary-fixed": "#001a42",
+                        "on-error-container": "#93000a",
+                        "on-surface-variant": "#424754",
+                        "on-surface": "#191b23",
+                        "on-error": "#ffffff",
+                        "surface-tint": "#005ac2",
+                        "on-background": "#191b23",
+                        "surface-bright": "#f9f9ff",
+                        "outline": "#727785",
+                        "secondary-fixed-dim": "#b1c6f9",
+                        "secondary": "#495e8a",
+                        "inverse-surface": "#2e3038",
+                        "secondary-fixed": "#d8e2ff",
+                        "primary": "#0058be",
+                        "on-secondary-fixed": "#001a42",
+                        "surface-variant": "#e1e2ec",
+                        "inverse-on-surface": "#eff0fa",
+                        "primary-fixed-dim": "#adc6ff",
+                        "surface": "#f9f9ff",
+                        "surface-container-high": "#e6e7f2",
+                        "on-secondary": "#ffffff",
+                        "inverse-primary": "#adc6ff",
+                        "on-primary": "#ffffff",
+                        "error": "#ba1a1a",
+                        "on-secondary-fixed-variant": "#304671",
+                        "secondary-container": "#b6ccff",
+                        "error-container": "#ffdad6",
+                        "tertiary-fixed-dim": "#ffb786",
+                        "on-tertiary": "#ffffff",
+                        "on-tertiary-fixed-variant": "#723600",
+                        "tertiary": "#924700",
+                        "tertiary-container": "#b75b00",
+                        "surface-container": "#ecedf7",
+                        "surface-container-low": "#f2f3fd",
+                        "on-tertiary-fixed": "#311400",
+                        "surface-container-lowest": "#ffffff",
+                        "on-tertiary-container": "#fffbff",
+                        "outline-variant": "#c2c6d6",
+                        "tertiary-fixed": "#ffdcc6",
+                        "primary-fixed": "#d8e2ff",
+                        "on-secondary-container": "#405682",
+                        "surface-dim": "#d8d9e3",
+                        "background": "#f9f9ff"
+                    },
+                    fontFamily: {
+                        "headline": ["Manrope"],
+                        "body": ["Inter"],
+                        "label": ["Inter"]
+                    },
+                    borderRadius: {"DEFAULT": "0.25rem", "lg": "0.5rem", "xl": "0.75rem", "full": "9999px"},
+                },
+            },
+        }
+    </script>
+<style>
+        .material-symbols-outlined {
+            font-variation-settings: 'FILL' 0, 'wght' 400, 'GRAD' 0, 'opsz' 24;
+        }
+        body {
+            font-family: 'Inter', sans-serif;
+        }
+        .font-headline {
+            font-family: 'Manrope', sans-serif;
+        }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-surface text-on-surface min-h-screen">
+<!-- TopAppBar -->
+<header class="bg-[#f9f9ff]/70 backdrop-blur-xl docked full-width top-0 z-40 fixed top-0 left-0 right-0">
+<div class="flex justify-between items-center w-full px-6 py-4">
+<div class="flex items-center gap-4">
+<span class="material-symbols-outlined text-blue-600">menu</span>
+<h1 class="font-['Manrope'] font-bold tracking-tight text-xl text-[#191b23]">The Scholastic Architect</h1>
+</div>
+<div class="flex items-center gap-6">
+<nav class="hidden md:flex gap-8">
+<span class="text-slate-500 font-medium hover:bg-blue-50 transition-colors px-2 py-1 rounded cursor-pointer">Home</span>
+<span class="text-slate-500 font-medium hover:bg-blue-50 transition-colors px-2 py-1 rounded cursor-pointer">Academics</span>
+<span class="text-blue-700 font-bold border-b-2 border-blue-600 px-2 py-1 cursor-pointer">Marks</span>
+</nav>
+<button class="bg-blue-600 text-white px-4 py-2 rounded-lg font-['Manrope'] font-semibold text-sm active:scale-95 duration-150">
+                    Calendar
+                </button>
+</div>
+</div>
+</header>
+<main class="pt-24 pb-32 px-4 md:px-0 flex items-center justify-center min-h-[calc(100vh-80px)]">
+<!-- Mark Entry Modal/Container -->
+<div class="w-full max-w-xl bg-surface-container-lowest rounded-xl shadow-[0_12px_32px_rgba(25,27,35,0.06)] overflow-hidden relative border border-outline-variant/15">
+<!-- Modal Header -->
+<div class="px-8 pt-8 pb-4">
+<div class="flex items-center justify-between mb-2">
+<h2 class="font-headline text-2xl font-bold tracking-tight text-on-surface">Enter New Marks</h2>
+<span class="material-symbols-outlined text-outline cursor-pointer hover:text-error transition-colors">close</span>
+</div>
+<p class="text-on-surface-variant text-sm body-md">Record student performance artifacts for the current academic cycle.</p>
+</div>
+<!-- Form Content -->
+<form class="px-8 pb-8 space-y-8">
+<!-- Subject Selection -->
+<div class="space-y-2">
+<label class="block text-xs font-semibold uppercase tracking-wider text-outline-variant font-label">Subject</label>
+<div class="relative group">
+<select class="w-full appearance-none bg-surface-container-low border-none rounded-lg px-4 py-3 text-on-surface focus:ring-2 focus:ring-primary/20 focus:bg-surface-container-highest transition-all outline-none font-body">
+<option disabled="" selected="" value="">Select a subject</option>
+<option>Advanced Architectural Theory</option>
+<option>Structural Mechanics II</option>
+<option>Urban Planning &amp; Design</option>
+<option>Sustainable Materials</option>
+<option>History of Modernism</option>
+</select>
+<div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
+<span class="material-symbols-outlined text-outline">expand_more</span>
+</div>
+</div>
+</div>
+<!-- Bento Grid Style for Type and Score -->
+<div class="grid grid-cols-1 md:grid-cols-2 gap-6">
+<!-- Exam Type -->
+<div class="space-y-2">
+<label class="block text-xs font-semibold uppercase tracking-wider text-outline-variant font-label">Exam Type</label>
+<div class="relative group">
+<select class="w-full appearance-none bg-surface-container-low border-none rounded-lg px-4 py-3 text-on-surface focus:ring-2 focus:ring-primary/20 focus:bg-surface-container-highest transition-all outline-none font-body">
+<option disabled="" selected="" value="">Select type</option>
+<option>Midterm Exam</option>
+<option>Final Exam</option>
+<option>Quiz / Short Test</option>
+<option>Assignment Submission</option>
+<option>Practical Lab</option>
+</select>
+<div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
+<span class="material-symbols-outlined text-outline">analytics</span>
+</div>
+</div>
+</div>
+<!-- Score Input -->
+<div class="space-y-2">
+<label class="block text-xs font-semibold uppercase tracking-wider text-outline-variant font-label">Score (0-100)</label>
+<div class="relative group">
+<input class="w-full bg-surface-container-low border-none rounded-lg px-4 py-3 text-on-surface focus:ring-2 focus:ring-primary/20 focus:bg-surface-container-highest transition-all outline-none font-headline text-lg font-bold" max="100" min="0" placeholder="00" type="number"/>
+<div class="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none">
+<span class="text-outline-variant font-bold">%</span>
+</div>
+</div>
+</div>
+</div>
+<!-- Informational Note -->
+<div class="bg-secondary-fixed/30 p-4 rounded-lg flex gap-3 items-start">
+<span class="material-symbols-outlined text-on-secondary-fixed-variant" style="font-variation-settings: 'FILL' 1;">info</span>
+<p class="text-xs text-on-secondary-fixed-variant font-medium leading-relaxed">
+                        Data entered here will be curated into the student's Academic Portfolio and contribute to the real-time GPA calculation.
+                    </p>
+</div>
+<!-- Action Buttons -->
+<div class="flex items-center justify-end gap-4 pt-4">
+<button class="px-6 py-2.5 rounded-lg font-headline font-semibold text-on-surface-variant hover:bg-surface-container-high transition-colors active:scale-95" type="button">
+                        Cancel
+                    </button>
+<button class="px-8 py-2.5 rounded-lg font-headline font-semibold text-white bg-gradient-to-br from-primary to-primary-container shadow-lg shadow-primary/20 hover:shadow-xl hover:shadow-primary/30 active:scale-95 transition-all" type="submit">
+                        Save Marks
+                    </button>
+</div>
+</form>
+<!-- Decorative Element -->
+<div class="absolute top-0 right-0 -mt-12 -mr-12 w-32 h-32 bg-primary/5 rounded-full blur-3xl"></div>
+</div>
+</main>
+<!-- BottomNavBar (Mobile Only) -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-4 pb-6 pt-3 bg-white/80 backdrop-blur-lg border-t border-[#f2f3fd] shadow-[0_-4px_20px_rgba(0,0,0,0.05)] md:hidden">
+<div class="flex flex-col items-center justify-center text-slate-400 px-6 py-2 hover:text-blue-600 transition-colors">
+<span class="material-symbols-outlined" data-icon="home">home</span>
+<span class="font-['Inter'] text-[10px] font-semibold uppercase tracking-wider mt-1">Home</span>
+</div>
+<div class="flex flex-col items-center justify-center text-slate-400 px-6 py-2 hover:text-blue-600 transition-colors">
+<span class="material-symbols-outlined" data-icon="school">school</span>
+<span class="font-['Inter'] text-[10px] font-semibold uppercase tracking-wider mt-1">Academics</span>
+</div>
+<div class="flex flex-col items-center justify-center bg-blue-600 text-white rounded-2xl px-6 py-2 scale-90 duration-200">
+<span class="material-symbols-outlined" data-icon="analytics" style="font-variation-settings: 'FILL' 1;">analytics</span>
+<span class="font-['Inter'] text-[10px] font-semibold uppercase tracking-wider mt-1">Marks</span>
+</div>
+</nav>
+<!-- Visual Polish: Decorative Gradients for Page -->
+<div class="fixed top-0 left-0 -z-10 w-full h-full pointer-events-none opacity-50">
+<div class="absolute top-[-10%] right-[-5%] w-[40%] h-[40%] rounded-full bg-primary/5 blur-[120px]"></div>
+<div class="absolute bottom-[-10%] left-[-5%] w-[30%] h-[30%] rounded-full bg-tertiary/5 blur-[100px]"></div>
+</div>
+</body></html>
