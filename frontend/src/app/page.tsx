@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import { useTheme } from "next-themes";
 import Navigator from "../components/Navigator";
 
@@ -18,7 +18,28 @@ export default function Dashboard() {
   const { theme, setTheme } = useTheme();
   
   const [isAuthenticated, setIsAuthenticated] = useState(false);
-  const [pin, setPin] = useState("");
+  const [isLoginMode, setIsLoginMode] = useState(true);
+  
+  // Registration States
+  const [fullName, setFullName] = useState("");
+  const [branch, setBranch] = useState("");
+  const [semester, setSemester] = useState("1");
+  const [regUsername, setRegUsername] = useState("");
+  const [regPassword, setRegPassword] = useState("");
+  
+  // Login States
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  
+  // Security States
+  const [loginAttempts, setLoginAttempts] = useState(0);
+  const [isLocked, setIsLocked] = useState(false);
+  const [lockTimer, setLockTimer] = useState(0);
+
+  // User DB for localStorage
+  const [usersDB, setUsersDB] = useState<any[]>([]);
+  const [authError, setAuthError] = useState("");
+  const [authSuccess, setAuthSuccess] = useState("");
   
   const [mounted, setMounted] = useState(false);
   const [currentView, setCurrentView] = useState("dashboard");
@@ -27,9 +48,21 @@ export default function Dashboard() {
   // AI Chat State
   const [isAIOpen, setIsAIOpen] = useState(false);
   const [chatInput, setChatInput] = useState("");
+  const [isTyping, setIsTyping] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+  
   const [chatMessages, setChatMessages] = useState([
     { role: 'assistant', text: 'Hello! I am Luminary AI. How can I assist you with your studies or curriculum today?' }
   ]);
+
+  const scrollToBottom = () => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  };
+
+  useEffect(() => {
+    if (isAIOpen) scrollToBottom();
+  }, [chatMessages, isTyping, isAIOpen]);
+
 
   const [recentItems, setRecentItems] = useState<RecentItem[]>([
     { id: '1', title: 'OS_Memory_Nodes.pdf', subtitle: '1.2 MB', icon: 'picture_as_pdf', colorClass: 'bg-slate-100 text-slate-500 dark:bg-slate-800' },
@@ -45,6 +78,11 @@ export default function Dashboard() {
 
   useEffect(() => {
     setMounted(true);
+    // Load users from localStorage
+    const savedUsers = localStorage.getItem('luminary_users');
+    if (savedUsers) {
+      setUsersDB(JSON.parse(savedUsers));
+    }
   }, []);
 
   // Risk & Profile State
@@ -70,33 +108,116 @@ export default function Dashboard() {
     }
   }, [isAuthenticated]);
 
+  useEffect(() => {
+    let interval: NodeJS.Timeout;
+    if (isLocked && lockTimer > 0) {
+      interval = setInterval(() => {
+        setLockTimer((prev) => prev - 1);
+      }, 1000);
+    } else if (lockTimer === 0 && isLocked) {
+      setIsLocked(false);
+      setLoginAttempts(0);
+    }
+    return () => clearInterval(interval);
+  }, [isLocked, lockTimer]);
+
   const handleNavClick = (view: string) => {
     setCurrentView(view);
   };
 
-  const submitChat = (e: React.FormEvent) => {
-    e.preventDefault();
+  const submitChat = async (e?: React.FormEvent) => {
+    if (e) e.preventDefault();
     if (!chatInput.trim()) return;
-    setChatMessages([...chatMessages, { role: 'user', text: chatInput }]);
+    
+    const userMsg = chatInput.trim();
+    setChatMessages(prev => [...prev, { role: 'user', text: userMsg }]);
     setChatInput("");
-    setTimeout(() => {
-      setChatMessages(prev => [...prev, { role: 'assistant', text: 'I am a simulated AI interface. Full backend processing will be integrated soon.' }]);
-    }, 800);
+    setIsTyping(true);
+
+    try {
+      const res = await fetch("http://localhost:8000/api/chat", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: userMsg, user_id: 'STU-101' })
+      });
+      const data = await res.json();
+      setChatMessages(prev => [...prev, { role: 'assistant', text: data.response || "Sorry, I couldn't process that request." }]);
+    } catch (error) {
+      setChatMessages(prev => [...prev, { role: 'assistant', text: "Network error. Please try again later." }]);
+    } finally {
+      setIsTyping(false);
+    }
   };
 
-  const handlePinSubmit = (e: React.FormEvent) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    if (pin === "1234") {
+    if (isLocked) return;
+    setAuthError("");
+    setAuthSuccess("");
+
+    const user = usersDB.find(u => u.username === loginUsername && u.password === loginPassword);
+
+    if (user || (loginUsername === "admin" && loginPassword === "password")) {
       setIsAuthenticated(true);
+      setLoginAttempts(0);
+      setLoginUsername("");
+      setLoginPassword("");
+      // Update profile with user info if available
+      if (user) {
+        setProfile(prev => ({
+          ...prev,
+          name: user.fullName,
+          email: user.username // assuming username is email based on placeholder
+        }));
+      }
     } else {
-      alert("Invalid PIN. Please try again.");
-      setPin("");
+      const newAttempts = loginAttempts + 1;
+      setLoginAttempts(newAttempts);
+      setAuthError("Invalid username or password.");
+      if (newAttempts >= 3) {
+        setIsLocked(true);
+        setLockTimer(30);
+        setAuthError(""); // Let the lockout message take over
+      }
     }
+  };
+
+  const handleRegister = (e: React.FormEvent) => {
+    e.preventDefault();
+    setAuthError("");
+    setAuthSuccess("");
+
+    // Check if user already exists
+    if (usersDB.some(u => u.username === regUsername)) {
+      setAuthError("Username already taken.");
+      return;
+    }
+
+    const newUser = {
+      fullName,
+      branch,
+      semester,
+      username: regUsername,
+      password: regPassword
+    };
+
+    const updatedUsers = [...usersDB, newUser];
+    setUsersDB(updatedUsers);
+    localStorage.setItem('luminary_users', JSON.stringify(updatedUsers));
+
+    setAuthSuccess("Registration successful! Please log in.");
+    setIsLoginMode(true);
+    
+    // Reset reg fields
+    setFullName("");
+    setBranch("");
+    setSemester("1");
+    setRegUsername("");
+    setRegPassword("");
   };
 
   const handleLogout = () => {
     setIsAuthenticated(false);
-    setPin("");
     setIsProfileOpen(false);
   };
 
@@ -104,22 +225,121 @@ export default function Dashboard() {
 
   if (!isAuthenticated) {
     return (
-      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center transition-colors duration-300 font-body px-4">
-        <div className="bg-white/90 dark:bg-slate-900/90 p-10 rounded-3xl shadow-xl dark:shadow-2xl border border-slate-200 dark:border-white/10 max-w-md w-full text-center backdrop-blur-xl">
-          <div className="w-20 h-20 bg-indigo-100 dark:bg-indigo-900/40 rounded-full flex items-center justify-center mx-auto mb-6 text-indigo-600 dark:text-indigo-400">
-             <span className="material-symbols-outlined text-4xl">lock</span>
+      <div className="min-h-screen bg-slate-50 dark:bg-slate-950 flex items-center justify-center transition-colors duration-300 font-body px-4 py-10">
+        <div className="bg-white/90 dark:bg-slate-900/90 p-8 rounded-3xl shadow-xl dark:shadow-2xl border border-slate-200 dark:border-white/10 max-w-lg w-full backdrop-blur-xl">
+          <div className="w-16 h-16 bg-indigo-100 dark:bg-indigo-900/40 rounded-full flex items-center justify-center mx-auto mb-6 text-indigo-600 dark:text-indigo-400">
+             <span className="material-symbols-outlined text-3xl">{isLoginMode ? 'lock' : 'person_add'}</span>
           </div>
-          <h2 className="text-3xl font-headline font-bold text-slate-800 dark:text-gray-100 tracking-tight mb-2">Secure Entry</h2>
-          <p className="text-slate-500 dark:text-slate-400 mb-8 text-sm">Enter the system PIN to access your luminary intelligence dashboard. (Hint: 1234)</p>
-          <form onSubmit={handlePinSubmit} className="space-y-6">
-             <input autoFocus type="password" value={pin} onChange={(e) => setPin(e.target.value)} placeholder="••••" className="w-full text-center text-4xl tracking-[1em] bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 p-5 rounded-2xl outline-none focus:border-indigo-500 transition-colors text-slate-800 dark:text-gray-100" />
-             <button type="submit" className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-4 rounded-2xl transition-all shadow-md hover:shadow-lg text-lg">
-               Authenticate
-             </button>
-          </form>
-          <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="mt-6 text-sm text-slate-500 dark:text-slate-400 hover:text-indigo-600 transition-colors">
-            Toggle {mounted && theme === 'dark' ? "Light" : "Dark"} Mode
-          </button>
+          
+          <h2 className="text-3xl font-headline font-bold text-slate-800 dark:text-gray-100 tracking-tight mb-2 text-center">
+            {isLoginMode ? "Secure Entry" : "Create Account"}
+          </h2>
+          <p className="text-slate-500 dark:text-slate-400 mb-8 text-sm text-center">
+            {isLoginMode 
+              ? "Access your luminary intelligence dashboard. (Hint: admin / password)" 
+              : "Register your student profile for intelligent tracking."}
+          </p>
+
+          {isLocked && (
+            <div className="mb-6 p-4 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-2xl text-red-600 dark:text-red-400 text-sm font-semibold flex items-center gap-3 animate-pulse">
+              <span className="material-symbols-outlined">warning</span>
+              Too many failed attempts. Please wait {lockTimer} seconds.
+            </div>
+          )}
+
+          {authError && (
+            <div className="mb-6 p-4 bg-red-50 dark:bg-red-500/10 border border-red-200 dark:border-red-500/20 rounded-2xl text-red-600 dark:text-red-400 text-sm font-semibold flex items-center gap-3">
+              <span className="material-symbols-outlined">error</span>
+              {authError}
+            </div>
+          )}
+
+          {authSuccess && (
+            <div className="mb-6 p-4 bg-emerald-50 dark:bg-emerald-500/10 border border-emerald-200 dark:border-emerald-500/20 rounded-2xl text-emerald-600 dark:text-emerald-400 text-sm font-semibold flex items-center gap-3">
+              <span className="material-symbols-outlined">check_circle</span>
+              {authSuccess}
+            </div>
+          )}
+
+          {isLoginMode ? (
+            <form onSubmit={handleLogin} className="space-y-4">
+               <div>
+                 <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Username</label>
+                 <input 
+                  disabled={isLocked}
+                  type="text" 
+                  value={loginUsername} 
+                  onChange={(e) => setLoginUsername(e.target.value)} 
+                  placeholder="admin" 
+                  className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 p-4 rounded-xl outline-none focus:border-indigo-500 transition-colors text-slate-800 dark:text-gray-100 disabled:opacity-50" 
+                 />
+               </div>
+               <div>
+                 <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Password</label>
+                 <input 
+                  disabled={isLocked}
+                  type="password" 
+                  value={loginPassword} 
+                  onChange={(e) => setLoginPassword(e.target.value)} 
+                  placeholder="••••••••" 
+                  className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 p-4 rounded-xl outline-none focus:border-indigo-500 transition-colors text-slate-800 dark:text-gray-100 disabled:opacity-50" 
+                 />
+               </div>
+               <button 
+                disabled={isLocked}
+                type="submit" 
+                className="w-full mt-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-4 rounded-xl transition-all shadow-md hover:shadow-lg text-lg disabled:opacity-50 disabled:cursor-not-allowed"
+               >
+                 Authenticate
+               </button>
+            </form>
+          ) : (
+            <form onSubmit={handleRegister} className="space-y-4">
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 <div>
+                   <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Full Name</label>
+                   <input type="text" required value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Jane Doe" className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 p-3 rounded-xl outline-none focus:border-indigo-500 transition-colors text-slate-800 dark:text-gray-100" />
+                 </div>
+                 <div>
+                   <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Branch</label>
+                   <select required value={branch} onChange={(e) => setBranch(e.target.value)} className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 p-3 rounded-xl outline-none focus:border-indigo-500 transition-colors text-slate-800 dark:text-gray-100 cursor-pointer">
+                      <option value="">Select Branch</option>
+                      <option value="Computer Science">Computer Science</option>
+                      <option value="Electrical">Electrical</option>
+                      <option value="Mechanical">Mechanical</option>
+                      <option value="Civil">Civil</option>
+                   </select>
+                 </div>
+               </div>
+               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                 <div>
+                    <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Semester</label>
+                    <input type="number" min="1" max="8" required value={semester} onChange={(e) => setSemester(e.target.value)} className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 p-3 rounded-xl outline-none focus:border-indigo-500 transition-colors text-slate-800 dark:text-gray-100" />
+                 </div>
+                 <div>
+                    <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Username/Email</label>
+                    <input type="text" required value={regUsername} onChange={(e) => setRegUsername(e.target.value)} placeholder="jane.doe@edu.com" className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 p-3 rounded-xl outline-none focus:border-indigo-500 transition-colors text-slate-800 dark:text-gray-100" />
+                 </div>
+               </div>
+               <div>
+                  <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Password Setup</label>
+                  <input type="password" required value={regPassword} onChange={(e) => setRegPassword(e.target.value)} placeholder="••••••••" className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 p-3 rounded-xl outline-none focus:border-indigo-500 transition-colors text-slate-800 dark:text-gray-100" />
+               </div>
+               <button type="submit" className="w-full mt-2 bg-indigo-600 hover:bg-indigo-700 text-white font-semibold py-4 rounded-xl transition-all shadow-md hover:shadow-lg text-lg">
+                 Register Profile
+               </button>
+            </form>
+          )}
+
+          <div className="flex flex-col items-center gap-4 mt-8 pt-6 border-t border-slate-100 dark:border-white/5">
+            <button onClick={() => { setIsLoginMode(!isLoginMode); setAuthError(""); setAuthSuccess(""); }} className="text-sm font-semibold text-indigo-600 dark:text-indigo-400 hover:underline transition-all">
+              {isLoginMode ? "Don't have an account? Register here" : "Already have an account? Login here"}
+            </button>
+            <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="text-xs text-slate-500 dark:text-slate-400 hover:text-indigo-600 transition-colors flex items-center gap-2">
+              <span className="material-symbols-outlined text-sm">{mounted && theme === 'dark' ? 'light_mode' : 'dark_mode'}</span>
+              Toggle {mounted && theme === 'dark' ? "Light" : "Dark"} Mode
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -150,11 +370,26 @@ export default function Dashboard() {
              
              {isSidebarAcademicsOpen && (
                <div className="pl-12 pr-2 py-2 space-y-1">
-                 {["timetable", "assignments", "exams", "quizzes", "marks"].map(view => (
-                   <button key={view} onClick={() => handleNavClick(view)} className={`w-full text-left py-2 px-3 rounded-lg text-sm font-medium transition-colors capitalize ${currentView === view ? 'text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10' : 'text-slate-500 dark:text-slate-400 hover:text-slate-800 dark:hover:text-gray-200 hover:bg-slate-100 dark:hover:bg-slate-800/50'}`}>
-                     {view}
+                   <button onClick={() => { setCurrentView('marks'); handleAccess({ id: 'nav-marks', title: 'Marks & Grades', subtitle: 'Academics View', icon: 'grade', colorClass: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'marks' ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
+                     <span className="material-symbols-outlined text-[16px] text-indigo-500 dark:text-indigo-400">calculate</span>
+                     Marks
                    </button>
-                 ))}
+                   <button onClick={() => { setCurrentView('timetable'); handleAccess({ id: 'nav-timetable', title: 'Timetable', subtitle: 'Academics View', icon: 'calendar_month', colorClass: 'bg-teal-50 text-teal-600 dark:bg-teal-500/10 dark:text-teal-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'timetable' ? 'bg-teal-50 text-teal-700 dark:bg-teal-500/20 dark:text-teal-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
+                     <span className="material-symbols-outlined text-[16px] text-teal-500 dark:text-teal-400">calendar_month</span>
+                     Timetable
+                   </button>
+                   <button onClick={() => { setCurrentView('assignments'); handleAccess({ id: 'nav-assignments', title: 'Assignments', subtitle: 'Academics View', icon: 'assignment', colorClass: 'bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'assignments' ? 'bg-orange-50 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
+                     <span className="material-symbols-outlined text-[16px] text-orange-500 dark:text-orange-400">assignment</span>
+                     Assignments
+                   </button>
+                   <button onClick={() => { setCurrentView('exams'); handleAccess({ id: 'nav-exams', title: 'Exams', subtitle: 'Academics View', icon: 'quiz', colorClass: 'bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'exams' ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
+                     <span className="material-symbols-outlined text-[16px] text-rose-500 dark:text-rose-400">history_edu</span>
+                     Exams
+                   </button>
+                   <button onClick={() => { setCurrentView('quizzes'); handleAccess({ id: 'nav-quizzes', title: 'Quizzes', subtitle: 'Academics View', icon: 'task', colorClass: 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'quizzes' ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
+                     <span className="material-symbols-outlined text-[16px] text-blue-500 dark:text-blue-400">quiz</span>
+                     Quizzes
+                   </button>
                </div>
              )}
            </div>
@@ -177,7 +412,10 @@ export default function Dashboard() {
               <span className="material-symbols-outlined text-[20px]">{mounted && theme === 'dark' ? 'light_mode' : 'dark_mode'}</span>
             </button>
             <button 
-              onClick={() => setIsProfileOpen(true)}
+              onClick={() => {
+                setIsProfileOpen(true);
+                handleAccess({ id: 'nav-profile', title: 'User Profile', subtitle: 'Settings & Info', icon: 'person', colorClass: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400' });
+              }}
               className="w-10 h-10 p-2 rounded-full bg-indigo-600 hover:bg-indigo-700 transition-colors flex items-center justify-center text-white shadow-md shadow-indigo-600/20"
             >
               <span className="material-symbols-outlined text-[20px]">person</span>
@@ -388,16 +626,26 @@ export default function Dashboard() {
                     {msg.text}
                   </div>
                 ))}
+                {isTyping && (
+                  <div className="p-3 rounded-2xl text-sm bg-white dark:bg-slate-800 text-slate-500 italic self-start border border-slate-100 dark:border-white/5 rounded-bl-sm shadow-sm flex items-center gap-2">
+                    <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce"></span>
+                    <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.2s' }}></span>
+                    <span className="w-1.5 h-1.5 bg-slate-400 rounded-full animate-bounce" style={{ animationDelay: '0.4s' }}></span>
+                    Luminary AI is thinking...
+                  </div>
+                )}
+                <div ref={messagesEndRef} />
               </div>
               <form onSubmit={submitChat} className="p-3 bg-white dark:bg-slate-900 border-t border-slate-100 dark:border-white/5 flex gap-2">
                 <input 
                   type="text" 
                   value={chatInput} 
                   onChange={(e) => setChatInput(e.target.value)} 
+                  disabled={isTyping}
                   placeholder="Ask me anything..." 
                   className="w-full bg-slate-100 dark:bg-slate-800 text-sm px-4 py-2 rounded-full focus:outline-none text-slate-900 dark:text-gray-100 border border-transparent focus:border-indigo-500/50"
                 />
-                <button type="submit" className="w-9 h-9 bg-indigo-600 text-white shrink-0 rounded-full flex items-center justify-center hover:bg-indigo-700 transition">
+                <button type="submit" disabled={isTyping || !chatInput.trim()} className="w-9 h-9 bg-indigo-600 text-white shrink-0 rounded-full flex items-center justify-center hover:bg-indigo-700 transition disabled:opacity-50">
                   <span className="material-symbols-outlined text-sm">send</span>
                 </button>
               </form>

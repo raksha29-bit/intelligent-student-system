@@ -1,6 +1,13 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import os
+import google.generativeai as genai
+from dotenv import load_dotenv
+
+load_dotenv()
+genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+
 from ml_pipelines.nlp_chatbot.chatbot import process_chat_message
 from ml_pipelines.risk_engine.predictor import predict_academic_risk
 from ml_pipelines.recommendations.embedding import get_recommendations
@@ -16,6 +23,9 @@ app.add_middleware(
     allow_methods=["*"], # Allows GET, POST, PUT, DELETE, etc.
     allow_headers=["*"], # Allows all headers
 )
+
+class ChatRequest(BaseModel):
+    message: str
 
 class ChatMessage(BaseModel):
     message: str
@@ -68,9 +78,10 @@ async def view_marks(subject: str):
 # --- Existing ML Pipeline Routes ---
 
 @app.post("/api/chat")
-async def chat_endpoint(request: ChatMessage):
-    response = process_chat_message(request.user_id, request.message)
-    return {"reply": response}
+async def chat_endpoint(request: ChatRequest):
+    model = genai.GenerativeModel("gemini-2.5-flash", system_instruction="You are Luminary AI, an expert, encouraging academic tutor integrated into a university learning management system. Provide concise, helpful answers.")
+    chat_response = model.generate_content(request.message)
+    return {"response": chat_response.text}
 
 @app.post("/api/risk/predict")
 async def risk_predict_endpoint(request: RiskProfileRequest):
