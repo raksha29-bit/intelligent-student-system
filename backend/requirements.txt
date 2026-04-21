@@ -12,3 +12,8 @@ faker
 passlib[bcrypt]
 aiosqlite
 Pillow
+PyPDF2
+google-genai
+python-dotenv
+python-multipart
+greenlet

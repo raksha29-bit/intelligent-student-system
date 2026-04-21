@@ -15,6 +15,7 @@ interface RecentItem {
 }
 
 export default function Dashboard() {
+  const DEMO_FORCE_RISK = true; // Set to true for hackathon demonstrations to force the 'CRITICAL' risk state.
   const [isProfileOpen, setIsProfileOpen] = useState(false);
   const [isMarksOpen, setIsMarksOpen] = useState(false);
   const { theme, setTheme } = useTheme();
@@ -120,6 +121,8 @@ export default function Dashboard() {
       .catch(console.error);
     }
   }, [isAuthenticated, currentUserId]);
+
+  const isRiskFound = DEMO_FORCE_RISK || riskData?.alert_trigger;
 
   useEffect(() => {
     if (isAuthenticated && currentUserId) {
@@ -631,32 +634,39 @@ export default function Dashboard() {
               {/* 50/50 Split: Risk Radar & Record Mark */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                  {/* Risk Radar */}
-                 <div className={`p-8 rounded-3xl shadow-sm border transition-colors ${riskData?.alert_trigger ? 'bg-red-50 dark:bg-red-900/10 border-red-200 dark:border-red-500/20' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-white/10'}`}>
+                 <div className={`p-8 rounded-3xl shadow-sm border transition-all duration-500 ${isRiskFound ? 'bg-red-50/80 dark:bg-red-950/20 border-red-200 dark:border-red-500/30 shadow-red-500/10' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-white/10'}`}>
                     <div className="flex justify-between items-center mb-6">
-                      <h4 className={`font-headline text-xl font-bold tracking-tight flex items-center gap-2 ${riskData?.alert_trigger ? 'text-red-700 dark:text-red-400' : 'text-slate-800 dark:text-gray-100'}`}>
+                      <h4 className={`font-headline text-xl font-bold tracking-tight flex items-center gap-2 ${isRiskFound ? 'text-red-700 dark:text-red-400' : 'text-slate-800 dark:text-gray-100'}`}>
                         <span className="material-symbols-outlined">radar</span> Risk Radar
                       </h4>
-                      {riskData?.alert_trigger ? (
-                        <div className="bg-red-500/10 text-red-600 dark:text-red-400 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest border border-red-200 dark:border-red-500/30">
-                          Alert
+                      {isRiskFound ? (
+                        <div className="bg-red-500 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest animate-pulse">
+                          CRITICAL
                         </div>
                       ) : (
-                        <div className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-xs font-bold px-3 py-1 rounded-full uppercase tracking-widest border border-emerald-200 dark:border-emerald-500/30">
+                        <div className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest border border-emerald-200 dark:border-emerald-500/30">
                           Stable
                         </div>
                       )}
                     </div>
                     
-                    <p className={`text-sm leading-relaxed ${riskData?.alert_trigger ? 'text-red-800/80 dark:text-red-300/80 font-medium' : 'text-slate-600 dark:text-slate-400'}`}>
-                      {riskData?.details || 'Analyzing curriculum velocity models. No significant risk detected across enrolled modules.'}
+                    <p className={`text-sm leading-relaxed mb-6 ${isRiskFound ? 'text-red-900/80 dark:text-red-200/80 font-medium' : 'text-slate-600 dark:text-slate-400'}`}>
+                      {isRiskFound ? 
+                        (DEMO_FORCE_RISK ? "CRITICAL: Multiple modules are currently below passing trajectory. Immediate curriculum intervention is recommended to recover academic standing." : riskData?.details) 
+                        : 'Analyzing curriculum velocity models. No significant risk detected across enrolled modules.'}
                     </p>
                     
-                    {riskData?.alert_trigger && (
-                        <div className="mt-6">
-                            <button onClick={triggerResolveFlow} className="text-sm bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-xl shadow-sm hover:shadow transition-all w-full flex justify-center items-center gap-2">
-                              <span className="material-symbols-outlined text-[18px]">build</span> Resolve Flow
-                            </button>
-                        </div>
+                    {isRiskFound && (
+                        <button 
+                          onClick={triggerResolveFlow} 
+                          className="group relative w-full overflow-hidden rounded-2xl bg-linear-to-r from-red-600 to-orange-600 p-[1.5px] transition-all hover:scale-[1.02] active:scale-95 shadow-lg shadow-red-600/30"
+                        >
+                            <div className="relative flex items-center justify-center gap-3 bg-red-600 px-6 py-4 rounded-[14px] transition-colors group-hover:bg-transparent">
+                                <span className="material-symbols-outlined text-white text-[20px] animate-spin-slow">auto_awesome</span>
+                                <span className="font-bold text-white text-sm">Generate Resolve Roadmap ✨</span>
+                            </div>
+                            <div className="absolute inset-0 animate-pulse bg-white/20"></div>
+                        </button>
                     )}
                  </div>
 

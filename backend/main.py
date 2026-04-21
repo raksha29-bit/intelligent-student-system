@@ -2,7 +2,8 @@ from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
-import google.generativeai as genai
+from google import genai
+from google.genai import types
 from dotenv import load_dotenv
 from sqlmodel.ext.asyncio.session import AsyncSession
 from sqlmodel import select
@@ -13,6 +14,7 @@ import io
 import PyPDF2
 import random
 from PIL import Image
+from datetime import datetime
 
 load_dotenv()
 api_keys = [os.getenv("GEMINI_API_KEY_1"), os.getenv("GEMINI_API_KEY_2")]
@@ -25,6 +27,7 @@ from database.mock_data import mock_user_profile, mock_marks
 from app.core.database import get_session
 from app.models import User, Course, Mark, ChatHistory, Assignment, TimetableSlot, Exam, Quiz
 from ml_engine import train_and_predict_risk
+import tempfile
 
 app = FastAPI()
 
@@ -132,18 +135,28 @@ async def onboarding_upload(file: UploadFile = File(...), session: AsyncSession 
     courses_data = []
     for key in api_keys:
         try:
-            genai.configure(api_key=key)
-            model = genai.GenerativeModel("gemini-2.5-flash")
+            client = genai.Client(api_key=key)
             if img:
-                resp = model.generate_content([prompt, img])
+                # Convert PIL to bytes
+                img_byte_arr = io.BytesIO()
+                img.save(img_byte_arr, format='PNG')
+                content_parts = [
+                    types.Part.from_bytes(data=img_byte_arr.getvalue(), mime_type='image/png'),
+                    prompt
+                ]
             else:
-                resp = model.generate_content(prompt)
+                content_parts = prompt
+
+            resp = client.models.generate_content(
+                model="gemini-2.0-flash",
+                contents=content_parts
+            )
             ai_text = resp.text.strip()
             ai_text = ai_text.replace("```json", "").replace("```", "").strip()
             courses_data = json.loads(ai_text)
             break
         except Exception as e:
-            print(f"Key failed, rotating to next key... Error: {e}")
+            print(f"Key failed in Onboarding, rotating... Error: {e}")
     else:
         courses_data = [{"course_code": "GEN101", "title": "General Demo Course", "credits": 3, "type": "theory", "syllabus_topics": ["Welcome", "Introduction"], "assessments": [{"name": "Midterm", "max_marks": 30}, {"name": "Final", "max_marks": 70}]}]
 
@@ -358,11 +371,18 @@ async def chat_endpoint(request: ChatRequest, session: AsyncSession = Depends(ge
         context += f"- {m.course.title} ({m.course.code}): {m.score}/{m.max_score} ({m.type})\n"
         
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=f"You are Luminary AI, an expert, encouraging academic tutor integrated into a university learning management system. Provide concise, helpful answers. Here is the student's academic context:\n{context}")
-        chat_response = model.generate_content(request.message)
+        # We use the first key as default for chat
+        client = genai.Client(api_key=api_keys[0])
+        sys_instr = f"You are Luminary AI, an expert, encouraging academic tutor integrated into a university learning management system. Provide concise, helpful answers. Here is the student's academic context:\n{context}"
+        
+        chat_response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            config=types.GenerateContentConfig(system_instruction=sys_instr),
+            contents=request.message
+        )
         ai_reply = chat_response.text
     except Exception as e:
-        print(f"Gemini API Error: {e}")
+        print(f"Gemini API Error in Chat: {e}")
         ai_reply = "The AI tutor is currently resting, saving your query..."
         
     # Save AI message
@@ -386,14 +406,13 @@ async def risk_predict_endpoint_get(user_id: str, session: AsyncSession = Depend
     
     for key in api_keys:
         try:
-            genai.configure(api_key=key)
-            model = genai.GenerativeModel("gemini-2.5-flash")
+            client = genai.Client(api_key=key)
             prompt = f"You are an academic advisor. Our native ML model predicts this student will score the following on their upcoming exams based on their current trajectory: {ml_summary}. Write a 2-sentence encouraging strategy to help them improve, mentioning these exact predicted numbers."
-            response = model.generate_content(prompt)
+            response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
             assessment = response.text.strip()
             break
         except Exception as e:
-            print(f"Gemini NLG Error: {e}")
+            print(f"Gemini NLG Error in Risk Radar: {e}")
             continue
     else:
         # Fallback if Gemini fails
@@ -431,7 +450,7 @@ async def risk_roadmap_generate(user_id: str, session: AsyncSession = Depends(ge
         context += f"- {m.course.title} ({m.course.code}): {m.score}/{m.max_score} ({m.type})\n"
         
     try:
-        model = genai.GenerativeModel("gemini-2.5-flash")
+        client = genai.Client(api_key=api_keys[0])
         prompt = f"""You are an empathetic, expert academic advisor for engineering students.
 Based on the following student performance, you must provide a highly structured response using Markdown with the following EXACT sections:
 
@@ -451,10 +470,10 @@ Ensure you generate at least 3-4 distinct paragraphs. Do not deviate from these 
 
 Context:
 {context}"""
-        response = model.generate_content(prompt)
+        response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
         roadmap = response.text
     except Exception as e:
-        print(f"Gemini API Error: {e}")
+        print(f"Gemini API Error in Roadmap: {e}")
         roadmap = "I know things might seem challenging right now, but you are more capable than your current grades reflect. Here is a quick 3-step plan: 1. Review your lowest marked subject carefully. 2. Focus on conceptual understanding before practicing. 3. Reach out to your TA or professor for specific guidance. You've got this, don't give up!"
 
     user.saved_roadmap = roadmap
@@ -749,9 +768,8 @@ async def predict_target_endpoint(user_id: int, req: TargetSGPARequest, session:
     predictions = []
     for key in api_keys:
         try:
-            genai.configure(api_key=key)
-            model = genai.GenerativeModel("gemini-2.5-flash")
-            resp = model.generate_content(prompt)
+            client = genai.Client(api_key=key)
+            resp = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
             raw_text = resp.text.strip().replace("```json", "").replace("```", "").strip()
             predictions = json.loads(raw_text)
             break
@@ -796,6 +814,116 @@ async def update_assessment(assessment_id: int, req: AssessmentUpdate, session: 
         await session.commit()
     
     return {"status": "success", "new_total": mark.score if mark else None}
+
+@app.get("/api/courses")
+async def get_all_courses(session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(Course))
+    courses = result.scalars().all()
+    return [{"id": c.id, "code": c.code, "title": c.title} for c in courses]
+
+@app.post("/api/timetable/upload")
+async def parse_timetable(file: UploadFile = File(...), session: AsyncSession = Depends(get_session)):
+    """
+    Accepts a PDF or Image, uploads it to Gemini, and extracts structured timetable data.
+    """
+    if not file.filename.endswith(('.pdf', '.png', '.jpg', '.jpeg')):
+        raise HTTPException(status_code=400, detail="Only PDF and images are supported.")
+
+    try:
+        # 1. Save file temporarily
+        suffix = f".{file.filename.split('.')[-1]}"
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as temp_file:
+            content = await file.read()
+            temp_file.write(content)
+            temp_path = temp_file.name
+
+        # 2. Upload to Gemini via the File API
+        # We use the first available key for this operation
+        client = genai.Client(api_key=api_keys[0])
+        uploaded_file = client.files.upload(path=temp_path)
+
+        # 3. Prompt Gemini to strictly output JSON
+        prompt = """
+        You are an expert academic parser. Analyze this uploaded timetable/syllabus.
+        Extract the class schedule and return ONLY a valid JSON array of objects with the following keys:
+        - "day": String (e.g., "Monday")
+        - "course_code": String (e.g., "CS301")
+        - "course_name": String (e.g., "Operating Systems")
+        - "start_time": String (e.g., "10:00 AM")
+        - "end_time": String (e.g., "11:30 AM")
+        - "room": String (or "N/A" if not provided)
+        
+        Rules:
+        - If 'course_code' is missing but 'course_name' is present, try to infer the code or use a slugified version.
+        - Return ONLY a raw JSON array. No markdown blocks.
+        """
+
+        response = client.models.generate_content(
+            model="gemini-2.0-flash",
+            contents=[uploaded_file, prompt]
+        )
+        
+        # Cleanup temp file and Gemini file
+        os.remove(temp_path)
+        try:
+            client.files.delete(name=uploaded_file.name)
+        except:
+            pass
+
+        # 4. Parse the JSON response
+        try:
+            raw_text = response.text.replace('```json', '').replace('```', '').strip()
+            parsed_data = json.loads(raw_text)
+            
+            slots_created = 0
+            for item in parsed_data:
+                code = item.get("course_code", "GEN101")
+                title = item.get("course_name", "General Course")
+                
+                # Find or Create Course
+                res = await session.execute(select(Course).where(Course.code == code))
+                course = res.scalars().first()
+                if not course:
+                    course = Course(code=code, title=title, credits=3)
+                    session.add(course)
+                    await session.commit()
+                    await session.refresh(course)
+                
+                slot = TimetableSlot(
+                    course_id=course.id,
+                    day_of_week=item.get("day"),
+                    start_time=item.get("start_time"),
+                    end_time=item.get("end_time"),
+                    room_number=item.get("room", "N/A")
+                )
+                session.add(slot)
+                slots_created += 1
+            
+            await session.commit()
+            return {"status": "success", "slots_created": slots_created, "data": parsed_data}
+        
+        except json.JSONDecodeError:
+            raise HTTPException(status_code=500, detail="Failed to parse Gemini output as JSON.")
+
+    except Exception as e:
+        print(f"Extraction Error: {e}")
+        raise HTTPException(status_code=500, detail=str(e))
+
+@app.post("/api/assignments/manual")
+async def add_manual_assignment(data: dict, session: AsyncSession = Depends(get_session)):
+    try:
+        new_assignment = Assignment(
+            title=data.get("title"),
+            due_date=datetime.fromisoformat(data.get("due_date").replace('Z', '+00:00')),
+            status="Pending",
+            student_id=data.get("student_id"),
+            course_id=data.get("course_id")
+        )
+        session.add(new_assignment)
+        await session.commit()
+        return {"status": "success", "message": "Assignment added manually."}
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/health")
 def health_check():

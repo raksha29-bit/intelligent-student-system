@@ -1,146 +1,194 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
+import { UploadCloud, Calendar, FileText, Loader2, X, CheckCircle2, AlertCircle, ArrowLeft } from "lucide-react";
 import Link from "next/link";
+import Navigator from "../../components/Navigator";
 
-const DAYS = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"];
+interface Course {
+  id: number;
+  code: string;
+  title: string;
+}
+
+interface TimetableSlot {
+  id: number;
+  day_of_week: string;
+  start_time: string;
+  end_time: string;
+  room_number: string;
+  course: {
+    code: string;
+    title: string;
+  };
+}
 
 export default function TimetablePage() {
-  const [timetable, setTimetable] = useState<any[]>([]);
-  const [loading, setLoading] = useState(true);
-  const [activeDay, setActiveDay] = useState("Monday");
+  const [mounted, setMounted] = useState(false);
+  const [isUploading, setIsUploading] = useState(false);
+  const [courses, setCourses] = useState<Course[]>([]);
+  const [timetable, setTimetable] = useState<TimetableSlot[]>([]);
+  const [currentUserId, setCurrentUserId] = useState<string | null>(null);
+  const [notification, setNotification] = useState<{type: 'success' | 'error', message: string} | null>(null);
+
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
-    const currentUserId = localStorage.getItem('luminary_active_user') || "STU-101";
-    fetch(`http://localhost:8000/api/timetable/${currentUserId}`)
-      .then(res => res.json())
-      .then(data => {
-        if (data.status === "success") {
-          setTimetable(data.timetable);
-          
-          // Auto-select the day with first available class or current day if weekday
-          const todayIndex = new Date().getDay();
-          if (todayIndex >= 1 && todayIndex <= 5) {
-             setActiveDay(DAYS[todayIndex - 1]);
-          }
-        }
-        setLoading(false);
-      })
-      .catch(console.error);
+    setMounted(true);
+    const userId = localStorage.getItem('luminary_active_user');
+    setCurrentUserId(userId);
+    
+    if (userId) {
+      fetchTimetable(userId);
+    }
   }, []);
 
-  const getSlotsForDay = (day: string) => {
-    return timetable
-      .filter((s) => s.day_of_week === day)
-      .sort((a, b) => {
-        // Simple sort logic based on start time string like "09:00 AM"
-        const getTimeVal = (timeStr: string) => {
-            const [time, period] = timeStr.split(' ');
-            let [hours, mins] = time.split(':').map(Number);
-            if (period === 'PM' && hours !== 12) hours += 12;
-            if (period === 'AM' && hours === 12) hours = 0;
-            return hours * 60 + mins;
-        }
-        return getTimeVal(a.start_time) - getTimeVal(b.start_time);
-      });
+
+  const fetchTimetable = async (userId: string) => {
+    try {
+      const res = await fetch(`http://localhost:8000/api/timetable/${userId}`);
+      const data = await res.json();
+      if (data.status === "success") {
+        setTimetable(data.timetable);
+      }
+    } catch (err) {
+      console.error("Failed to fetch timetable", err);
+    }
   };
 
+  const handleFileUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+
+    setIsUploading(true);
+    const formData = new FormData();
+    formData.append("file", file);
+
+    try {
+      const response = await fetch("http://localhost:8000/api/timetable/upload", {
+        method: "POST",
+        body: formData,
+      });
+      const data = await response.json();
+      if (data.status === "success") {
+        setNotification({ type: 'success', message: `Successfully synced ${data.slots_created} schedule slots!` });
+        if (currentUserId) fetchTimetable(currentUserId);
+      } else {
+        setNotification({ type: 'error', message: data.detail || "Upload failed" });
+      }
+    } catch (error) {
+      setNotification({ type: 'error', message: "Network error during upload." });
+    } finally {
+      setIsUploading(false);
+      if (fileInputRef.current) fileInputRef.current.value = "";
+    }
+  };
+
+
+  if (!mounted) return null;
+
   return (
-    <div className="flex flex-col min-h-screen bg-slate-50 dark:bg-slate-950 font-body transition-colors duration-300">
-      <header className="sticky top-0 z-10 bg-slate-50/80 dark:bg-slate-950/80 backdrop-blur-md px-8 py-4 flex justify-between items-center border-b border-slate-200 dark:border-white/5">
-        <div className="flex items-center gap-3">
-            <Link href="/" className="w-10 h-10 p-2 rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-slate-700 shadow-sm transition-colors text-slate-600 dark:text-slate-300 flex items-center justify-center">
-              <span className="material-symbols-outlined text-[20px]">arrow_back</span>
+    <div className="min-h-screen bg-slate-950 text-slate-100 font-sans selection:bg-indigo-500/30">
+      <div className="max-w-7xl mx-auto px-6 py-12 lg:px-8">
+        
+        {/* Header Section */}
+        <div className="flex flex-col md:flex-row md:items-end justify-between gap-6 mb-12">
+          <div>
+            <Link href="/" className="w-fit flex items-center gap-2 text-white/50 hover:text-white/90 transition-colors text-sm font-medium mb-4">
+              <ArrowLeft size={16} />
+              Back to Dashboard
             </Link>
-            <h1 className="font-headline font-bold text-xl tracking-tight text-slate-800 dark:text-gray-100">Timetable Explorer</h1>
+            <h1 className="text-4xl font-extrabold tracking-tight bg-clip-text text-transparent bg-linear-to-r from-white to-white/60">
+              Academic Schedule
+            </h1>
+            <p className="text-slate-400 mt-2 text-lg">Manage your classes and upcoming tasks with AI precision.</p>
+          </div>
         </div>
-      </header>
 
-      <main className="flex-1 overflow-y-auto px-8 pb-32 pt-8 max-w-6xl mx-auto w-full">
-        {loading ? (
-          <div className="flex flex-col items-center justify-center py-20">
-            <span className="material-symbols-outlined animate-spin text-4xl text-indigo-500 mb-4">progress_activity</span>
-            <p className="font-semibold uppercase tracking-widest text-slate-500 text-xs">Synchronizing Calendar...</p>
-          </div>
-        ) : (
-          <div className="space-y-8">
-            
-            {/* Days Tabs */}
-            <div className="flex overflow-x-auto no-scrollbar gap-2 pb-2">
-              {DAYS.map(day => {
-                const isActive = activeDay === day;
-                const slotCount = timetable.filter(s => s.day_of_week === day).length;
-                return (
-                  <button 
-                    key={day} 
-                    onClick={() => setActiveDay(day)}
-                    className={`flex items-center gap-2 px-6 py-3 rounded-2xl whitespace-nowrap font-bold text-sm transition-all shadow-sm ${isActive ? 'bg-indigo-600 text-white shadow-md shadow-indigo-600/20' : 'bg-white dark:bg-slate-900 border border-slate-200 dark:border-white/10 text-slate-600 dark:text-slate-400 hover:bg-slate-50 dark:hover:bg-slate-800'}`}
-                  >
-                    {day}
-                    {slotCount > 0 && (
-                      <span className={`px-2 py-0.5 rounded-full text-[10px] ${isActive ? 'bg-white/20 text-white' : 'bg-slate-100 dark:bg-slate-800 text-slate-500'}`}>{slotCount}</span>
-                    )}
-                  </button>
-                )
-              })}
+        {/* AI Ingestion Dropzone */}
+        <div 
+          className="relative overflow-hidden group cursor-pointer rounded-3xl border border-white/10 bg-white/5 p-12 backdrop-blur-2xl transition-all hover:bg-white/10 hover:border-indigo-500/50 mb-12"
+          onClick={() => fileInputRef.current?.click()}
+        >
+          <div className="absolute inset-0 bg-linear-to-br from-indigo-600/5 to-purple-600/5 opacity-0 group-hover:opacity-100 transition-opacity" />
+          
+          <input 
+            type="file" 
+            ref={fileInputRef} 
+            className="hidden" 
+            accept="image/*,application/pdf"
+            onChange={handleFileUpload}
+          />
+
+          <div className="relative flex flex-col items-center justify-center text-center space-y-6">
+            <div className={`p-6 rounded-2xl bg-white/5 border border-white/10 text-indigo-400 shadow-xl transition-all ${isUploading ? 'scale-110' : 'group-hover:scale-110 group-hover:bg-indigo-500/10 group-hover:border-indigo-500/30'}`}>
+               {isUploading ? <Loader2 className="animate-spin" size={40} /> : <UploadCloud size={40} />}
             </div>
+            <div>
+              <h3 className="text-2xl font-bold text-white/90">Gemini Auto-Sync</h3>
+              <p className="text-slate-400 max-w-md mx-auto mt-3 leading-relaxed">
+                Drop your syllabus PDF or timetable image. Our AI will parse the schedule and sync it to your dashboard instantly.
+              </p>
+            </div>
+            <div className="flex gap-3 text-xs font-bold uppercase tracking-widest text-slate-500">
+                <span className="px-3 py-1 bg-white/5 rounded-full border border-white/5">PDF</span>
+                <span className="px-3 py-1 bg-white/5 rounded-full border border-white/5">PNG</span>
+                <span className="px-3 py-1 bg-white/5 rounded-full border border-white/5">JPG</span>
+            </div>
+          </div>
+        </div>
 
-            {/* Slots List for Active Day */}
-            <div className="space-y-4">
-              {getSlotsForDay(activeDay).length > 0 ? (
-                getSlotsForDay(activeDay).map(slot => {
-                  const isLab = slot.course.title.toLowerCase().includes('lab');
-                  
-                  return (
-                    <div key={slot.id} className={`flex flex-col md:flex-row md:items-center bg-white/80 dark:bg-slate-900/80 backdrop-blur-xl border ${isLab ? 'border-orange-200 dark:border-orange-500/30' : 'border-indigo-200 dark:border-indigo-500/30'} rounded-3xl p-6 shadow-sm hover:-translate-y-1 transition-transform group relative overflow-hidden`}>
-                       
-                       {/* Subtle accent background gradient */}
-                       <div className={`absolute top-0 right-0 w-64 h-full bg-linear-to-l ${isLab ? 'from-orange-500/5' : 'from-indigo-500/5'} to-transparent blur-md -z-10`}></div>
-                       
-                       <div className="flex items-center gap-6 md:w-1/4 mb-4 md:mb-0 shrink-0">
-                         <div className={`flex flex-col items-center justify-center p-3 rounded-2xl ${isLab ? 'bg-orange-50 dark:bg-orange-500/10 text-orange-600 dark:text-orange-400' : 'bg-indigo-50 dark:bg-indigo-500/10 text-indigo-600 dark:text-indigo-400'}`}>
-                            <span className="material-symbols-outlined mb-1">{isLab ? 'science' : 'menu_book'}</span>
-                            <span className="text-xs font-bold uppercase tracking-widest">{isLab ? 'LAB' : 'THEORY'}</span>
-                         </div>
-                         <div>
-                           <p className="font-bold text-slate-800 dark:text-gray-100 text-lg tracking-tight">{slot.start_time}</p>
-                           <p className="text-slate-500 dark:text-slate-400 text-sm font-medium border-t border-slate-200 dark:border-white/10 mt-1 pt-1">{slot.end_time}</p>
-                         </div>
-                       </div>
-                       
-                       <div className="flex-1 md:px-8 border-l-0 md:border-l border-slate-100 dark:border-white/10">
-                         <h3 className="font-headline text-xl font-bold tracking-tight text-slate-800 dark:text-gray-100 mb-1">{slot.course.title}</h3>
-                         <div className="flex items-center gap-3">
-                           <span className={`text-xs font-bold px-2 py-1 rounded inline-block ${isLab ? 'bg-orange-100 dark:bg-orange-900/30 text-orange-700 dark:text-orange-400' : 'bg-indigo-100 dark:bg-indigo-900/30 text-indigo-700 dark:text-indigo-400'}`}>{slot.course.code}</span>
-                           <div className="flex items-center gap-1.5 text-sm text-slate-500 dark:text-slate-400 font-medium">
-                             <span className="material-symbols-outlined text-[16px]">location_on</span>
-                             {slot.room_number}
-                           </div>
-                         </div>
-                       </div>
-                       
-                       <div className="hidden md:flex justify-end p-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                         <button className="w-10 h-10 rounded-full bg-slate-50 dark:bg-slate-800 border border-slate-200 dark:border-white/10 flex items-center justify-center text-slate-400 hover:text-indigo-500 transition-colors">
-                           <span className="material-symbols-outlined">more_vert</span>
-                         </button>
-                       </div>
+        {/* Timetable Overview */}
+        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
+            {timetable.length > 0 ? (
+                timetable.map((slot) => (
+                    <div key={slot.id} className="p-6 rounded-2xl bg-white/5 border border-white/10 backdrop-blur-md hover:border-white/20 transition-all group">
+                        <div className="flex justify-between items-start mb-4">
+                            <div className="w-10 h-10 rounded-xl bg-indigo-500/10 text-indigo-400 flex items-center justify-center group-hover:bg-indigo-500 group-hover:text-white transition-all">
+                                <Calendar size={20} />
+                            </div>
+                            <span className="text-xs font-bold px-2 py-1 bg-white/5 rounded border border-white/10 text-slate-400 uppercase tracking-tighter">
+                                {slot.day_of_week}
+                            </span>
+                        </div>
+                        <h4 className="font-bold text-white/90 mb-1 line-clamp-1">{slot.course.title}</h4>
+                        <p className="text-sm text-slate-500 font-mono mb-4">{slot.course.code}</p>
+                        
+                        <div className="flex items-center gap-4 text-sm text-slate-400">
+                            <div className="flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-[18px]">schedule</span>
+                                {slot.start_time} - {slot.end_time}
+                            </div>
+                            <div className="flex items-center gap-1.5">
+                                <span className="material-symbols-outlined text-[18px]">location_on</span>
+                                {slot.room_number}
+                            </div>
+                        </div>
                     </div>
-                  );
-                })
-              ) : (
-                <div className="py-20 flex flex-col items-center justify-center text-center bg-slate-50 dark:bg-slate-800/20 border border-slate-200 dark:border-white/5 rounded-3xl">
-                  <div className="w-20 h-20 bg-slate-100 dark:bg-slate-800 rounded-full flex items-center justify-center mb-4 text-slate-400">
-                    <span className="material-symbols-outlined text-4xl">free_cancellation</span>
-                  </div>
-                  <h3 className="text-xl font-headline font-bold text-slate-800 dark:text-gray-100 mb-2">No Classes Today!</h3>
-                  <p className="text-slate-500">Enjoy your free time or prepare for upcoming assignments.</p>
+                ))
+            ) : (
+                <div className="col-span-full py-20 flex flex-col items-center justify-center text-slate-500 bg-white/5 rounded-3xl border border-dashed border-white/10">
+                    <Calendar size={48} className="mb-4 opacity-20" />
+                    <p className="font-medium">No schedule data yet. Use Gemini Auto-Sync to get started.</p>
                 </div>
-              )}
-            </div>
+            )}
+        </div>
+      </div>
 
+      {/* Navigator */}
+      <Navigator />
+
+
+      {/* Global Notifications */}
+      {notification && (
+          <div className="fixed top-8 right-8 z-100 animate-in slide-in-from-right">
+              <div className={`flex items-center gap-3 px-6 py-4 rounded-2xl border shadow-2xl backdrop-blur-xl ${notification.type === 'success' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-red-500/10 border-red-500/30 text-red-400'}`}>
+                  {notification.type === 'success' ? <CheckCircle2 size={24} /> : <AlertCircle size={24} />}
+                  <div className="font-bold">{notification.message}</div>
+                  <button onClick={() => setNotification(null)} className="ml-4 hover:opacity-70"><X size={18} /></button>
+              </div>
           </div>
-        )}
-      </main>
+      )}
     </div>
   );
 }
