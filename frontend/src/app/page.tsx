@@ -2,7 +2,9 @@
 
 import { useState, useEffect, useRef } from "react";
 import { useTheme } from "next-themes";
+import Link from "next/link";
 import Navigator from "../components/Navigator";
+import ReactMarkdown from 'react-markdown';
 
 interface RecentItem {
   id: string;
@@ -22,7 +24,7 @@ export default function Dashboard() {
   
   // Registration States
   const [fullName, setFullName] = useState("");
-  const [branch, setBranch] = useState("");
+  const [branch, setBranch] = useState("AIML");
   const [semester, setSemester] = useState("1");
   const [regUsername, setRegUsername] = useState("");
   const [regPassword, setRegPassword] = useState("");
@@ -43,7 +45,14 @@ export default function Dashboard() {
   
   const [mounted, setMounted] = useState(false);
   const [currentView, setCurrentView] = useState("dashboard");
+  const [currentUserId, setCurrentUserId] = useState<number | null>(null);
+  const [dashboardData, setDashboardData] = useState<any>(null);
   const [isSidebarAcademicsOpen, setIsSidebarAcademicsOpen] = useState(true);
+  
+  // Resolve Flow States
+  const [isResolveModalOpen, setIsResolveModalOpen] = useState(false);
+  const [roadmapData, setRoadmapData] = useState("");
+  const [roadmapStatus, setRoadmapStatus] = useState<'idle' | 'checking' | 'prompt' | 'viewing' | 'generating'>('idle');
   
   // AI Chat State
   const [isAIOpen, setIsAIOpen] = useState(false);
@@ -54,6 +63,7 @@ export default function Dashboard() {
   const [chatMessages, setChatMessages] = useState([
     { role: 'assistant', text: 'Hello! I am Luminary AI. How can I assist you with your studies or curriculum today?' }
   ]);
+
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
@@ -83,6 +93,13 @@ export default function Dashboard() {
     if (savedUsers) {
       setUsersDB(JSON.parse(savedUsers));
     }
+    
+    // Auto-login if session exists
+    const activeUserId = localStorage.getItem('luminary_active_user');
+    if (activeUserId) {
+      setIsAuthenticated(true);
+      setCurrentUserId(parseInt(activeUserId, 10));
+    }
   }, []);
 
   // Risk & Profile State
@@ -97,16 +114,30 @@ export default function Dashboard() {
 
   useEffect(() => {
     if (isAuthenticated) {
-      fetch("http://localhost:8000/api/risk/predict", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ student_id: "STU-101", marks: [75, 80, 65, 70], attendance: 0.85 })
-      })
+      fetch(`http://localhost:8000/api/risk/predict/${currentUserId || "STU-101"}`)
       .then(res => res.json())
       .then(data => setRiskData(data))
       .catch(console.error);
     }
-  }, [isAuthenticated]);
+  }, [isAuthenticated, currentUserId]);
+
+  useEffect(() => {
+    if (isAuthenticated && currentUserId) {
+      fetch(`http://localhost:8000/api/dashboard/${currentUserId}`)
+        .then(res => res.json())
+        .then(data => {
+          if (data.status === "success") {
+            setDashboardData(data);
+            setProfile(prev => ({
+              ...prev,
+              name: data.user.username,
+              email: data.user.email
+            }));
+          }
+        })
+        .catch(console.error);
+    }
+  }, [isAuthenticated, currentUserId]);
 
   useEffect(() => {
     let interval: NodeJS.Timeout;
@@ -149,77 +180,110 @@ export default function Dashboard() {
     }
   };
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     if (isLocked) return;
     setAuthError("");
     setAuthSuccess("");
 
-    const user = usersDB.find(u => u.username === loginUsername && u.password === loginPassword);
-
-    if (user || (loginUsername === "admin" && loginPassword === "password")) {
-      setIsAuthenticated(true);
-      setLoginAttempts(0);
-      setLoginUsername("");
-      setLoginPassword("");
-      // Update profile with user info if available
-      if (user) {
-        setProfile(prev => ({
-          ...prev,
-          name: user.fullName,
-          email: user.username // assuming username is email based on placeholder
-        }));
+    try {
+      const res = await fetch("http://localhost:8000/api/auth/login", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ username: loginUsername, password: loginPassword })
+      });
+      const data = await res.json();
+      
+      if (res.ok && data.status === "success") {
+        localStorage.setItem('luminary_active_user', data.user_id.toString());
+        window.location.href = "/";
+      } else {
+        throw new Error(data.detail || "Authentication Failed");
       }
-    } else {
+    } catch (err: any) {
       const newAttempts = loginAttempts + 1;
       setLoginAttempts(newAttempts);
-      setAuthError("Invalid username or password.");
+      setAuthError(err.message || "Invalid username or password.");
       if (newAttempts >= 3) {
         setIsLocked(true);
         setLockTimer(30);
-        setAuthError(""); // Let the lockout message take over
+        setAuthError(""); 
       }
     }
   };
 
-  const handleRegister = (e: React.FormEvent) => {
+  const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setAuthError("");
     setAuthSuccess("");
 
-    // Check if user already exists
-    if (usersDB.some(u => u.username === regUsername)) {
-      setAuthError("Username already taken.");
-      return;
+    try {
+      const res = await fetch("http://localhost:8000/api/auth/register", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ 
+           username: regUsername, 
+           email: regUsername, 
+           password: regPassword, 
+           full_name: fullName,
+           branch: branch
+        })
+      });
+      const data = await res.json();
+      
+      if (res.ok && data.user_id) {
+        localStorage.setItem('luminary_active_user', data.user_id.toString());
+        window.location.href = "/onboarding";
+      } else {
+        throw new Error(data.detail || "Registration Failed");
+      }
+    } catch (err: any) {
+      setAuthError(err.message || "Registration Failed");
     }
-
-    const newUser = {
-      fullName,
-      branch,
-      semester,
-      username: regUsername,
-      password: regPassword
-    };
-
-    const updatedUsers = [...usersDB, newUser];
-    setUsersDB(updatedUsers);
-    localStorage.setItem('luminary_users', JSON.stringify(updatedUsers));
-
-    setAuthSuccess("Registration successful! Please log in.");
-    setIsLoginMode(true);
-    
-    // Reset reg fields
-    setFullName("");
-    setBranch("");
-    setSemester("1");
-    setRegUsername("");
-    setRegPassword("");
   };
 
   const handleLogout = () => {
     setIsAuthenticated(false);
     setIsProfileOpen(false);
+    setCurrentUserId(null);
+    localStorage.removeItem('luminary_active_user');
+    window.location.href = "/";
   };
+
+  const triggerResolveFlow = () => {
+    handleAccess({ id: 'risk', title: 'OS Risk Resolution', subtitle: 'Action Item', icon: 'warning', colorClass: 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400' });
+    setIsResolveModalOpen(true);
+    setRoadmapStatus('checking');
+    fetch(`http://localhost:8000/api/risk/roadmap/check/${currentUserId || "1"}`)
+      .then(res => res.json())
+      .then(data => {
+          if (data.has_saved) {
+              setRoadmapData(data.roadmap);
+              setRoadmapStatus('prompt');
+          } else {
+              generateNewRoadmap();
+          }
+      })
+      .catch(err => {
+          setRoadmapData("Failed to check roadmap status.");
+          setRoadmapStatus('viewing');
+      });
+  };
+
+  const generateNewRoadmap = () => {
+      setRoadmapStatus('generating');
+      fetch(`http://localhost:8000/api/risk/roadmap/generate/${currentUserId || "1"}`, { method: "POST" })
+        .then(res => res.json())
+        .then(data => {
+            setRoadmapData(data.roadmap);
+            setRoadmapStatus('viewing');
+        })
+        .catch(err => {
+            setRoadmapData("Failed to generate roadmap.");
+            setRoadmapStatus('viewing');
+        });
+  };
+
 
   if (!mounted) return null;
 
@@ -236,7 +300,7 @@ export default function Dashboard() {
           </h2>
           <p className="text-slate-500 dark:text-slate-400 mb-8 text-sm text-center">
             {isLoginMode 
-              ? "Access your luminary intelligence dashboard. (Hint: admin / password)" 
+              ? "Access your luminary intelligence dashboard." 
               : "Register your student profile for intelligent tracking."}
           </p>
 
@@ -301,16 +365,25 @@ export default function Dashboard() {
                    <input type="text" required value={fullName} onChange={(e) => setFullName(e.target.value)} placeholder="Jane Doe" className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 p-3 rounded-xl outline-none focus:border-indigo-500 transition-colors text-slate-800 dark:text-gray-100" />
                  </div>
                  <div>
-                   <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Branch</label>
-                   <select required value={branch} onChange={(e) => setBranch(e.target.value)} className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 p-3 rounded-xl outline-none focus:border-indigo-500 transition-colors text-slate-800 dark:text-gray-100 cursor-pointer">
-                      <option value="">Select Branch</option>
-                      <option value="Computer Science">Computer Science</option>
-                      <option value="Electrical">Electrical</option>
-                      <option value="Mechanical">Mechanical</option>
-                      <option value="Civil">Civil</option>
-                   </select>
-                 </div>
-               </div>
+                    <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Academic Branch</label>
+                    <div className="relative">
+                      <select 
+                        required 
+                        value={branch} 
+                        onChange={(e) => setBranch(e.target.value)} 
+                        className="w-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-white/10 p-3 pr-10 rounded-xl outline-none focus:border-indigo-500 transition-all text-slate-800 dark:text-gray-100 cursor-pointer appearance-none shadow-sm"
+                      >
+                        <option value="AIML">AIML (AI & Machine Learning)</option>
+                        <option value="Computer Science Engineering">Computer Science Engineering (CSE)</option>
+                        <option value="Information Technology">Information Technology (IT)</option>
+                        <option value="Electronics & Communication">Electronics & Communication (ECE)</option>
+                      </select>
+                      <div className="absolute right-4 top-1/2 -translate-y-1/2 pointer-events-none text-slate-400">
+                        <span className="material-symbols-outlined text-sm">expand_more</span>
+                      </div>
+                    </div>
+                  </div>
+                </div>
                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                  <div>
                     <label className="text-[10px] uppercase tracking-widest text-slate-500 font-bold mb-1.5 block">Semester</label>
@@ -345,6 +418,11 @@ export default function Dashboard() {
     );
   }
 
+  const uniqueCourseIds = new Set(dashboardData?.marks?.map((m: any) => m.course.id));
+  const totalCourses = uniqueCourseIds.size || 0;
+  const theoryMarks = dashboardData?.marks?.filter((m: any) => m.type === 'theory') || [];
+  const labMarks = dashboardData?.marks?.filter((m: any) => m.type === 'lab') || [];
+
   return (
     <div className="flex h-screen overflow-hidden bg-slate-50 dark:bg-slate-950 text-slate-900 dark:text-gray-100 font-body transition-colors duration-300">
       
@@ -370,31 +448,40 @@ export default function Dashboard() {
              
              {isSidebarAcademicsOpen && (
                <div className="pl-12 pr-2 py-2 space-y-1">
-                   <button onClick={() => { setCurrentView('marks'); handleAccess({ id: 'nav-marks', title: 'Marks & Grades', subtitle: 'Academics View', icon: 'grade', colorClass: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'marks' ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
+                   <Link href="/marks" onClick={() => { handleAccess({ id: 'nav-marks', title: 'Marks & Grades', subtitle: 'Academics View', icon: 'grade', colorClass: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'marks' ? 'bg-indigo-50 text-indigo-700 dark:bg-indigo-500/20 dark:text-indigo-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
                      <span className="material-symbols-outlined text-[16px] text-indigo-500 dark:text-indigo-400">calculate</span>
                      Marks
-                   </button>
-                   <button onClick={() => { setCurrentView('timetable'); handleAccess({ id: 'nav-timetable', title: 'Timetable', subtitle: 'Academics View', icon: 'calendar_month', colorClass: 'bg-teal-50 text-teal-600 dark:bg-teal-500/10 dark:text-teal-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'timetable' ? 'bg-teal-50 text-teal-700 dark:bg-teal-500/20 dark:text-teal-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
+                   </Link>
+                   <Link href="/timetable" onClick={() => { handleAccess({ id: 'nav-timetable', title: 'Timetable', subtitle: 'Academics View', icon: 'calendar_month', colorClass: 'bg-teal-50 text-teal-600 dark:bg-teal-500/10 dark:text-teal-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'timetable' ? 'bg-teal-50 text-teal-700 dark:bg-teal-500/20 dark:text-teal-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
                      <span className="material-symbols-outlined text-[16px] text-teal-500 dark:text-teal-400">calendar_month</span>
                      Timetable
-                   </button>
-                   <button onClick={() => { setCurrentView('assignments'); handleAccess({ id: 'nav-assignments', title: 'Assignments', subtitle: 'Academics View', icon: 'assignment', colorClass: 'bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'assignments' ? 'bg-orange-50 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
+                   </Link>
+                   <Link href="/assignments" onClick={() => { handleAccess({ id: 'nav-assignments', title: 'Assignments', subtitle: 'Academics View', icon: 'assignment', colorClass: 'bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'assignments' ? 'bg-orange-50 text-orange-700 dark:bg-orange-500/20 dark:text-orange-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
                      <span className="material-symbols-outlined text-[16px] text-orange-500 dark:text-orange-400">assignment</span>
                      Assignments
-                   </button>
-                   <button onClick={() => { setCurrentView('exams'); handleAccess({ id: 'nav-exams', title: 'Exams', subtitle: 'Academics View', icon: 'quiz', colorClass: 'bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'exams' ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
+                   </Link>
+                   <Link href="/exams" onClick={() => { handleAccess({ id: 'nav-exams', title: 'Exams', subtitle: 'Academics View', icon: 'quiz', colorClass: 'bg-rose-50 text-rose-600 dark:bg-rose-500/10 dark:text-rose-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'exams' ? 'bg-rose-50 text-rose-700 dark:bg-rose-500/20 dark:text-rose-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
                      <span className="material-symbols-outlined text-[16px] text-rose-500 dark:text-rose-400">history_edu</span>
                      Exams
-                   </button>
-                   <button onClick={() => { setCurrentView('quizzes'); handleAccess({ id: 'nav-quizzes', title: 'Quizzes', subtitle: 'Academics View', icon: 'task', colorClass: 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'quizzes' ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
+                   </Link>
+                   <Link href="/quizzes" onClick={() => { handleAccess({ id: 'nav-quizzes', title: 'Quizzes', subtitle: 'Academics View', icon: 'task', colorClass: 'bg-blue-50 text-blue-600 dark:bg-blue-500/10 dark:text-blue-400' }); }} className={`w-full flex items-center gap-3 px-4 py-2 rounded-lg transition-colors text-sm ml-6 font-semibold ${currentView === 'quizzes' ? 'bg-blue-50 text-blue-700 dark:bg-blue-500/20 dark:text-blue-300' : 'hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-600 dark:text-gray-300'}`}>
                      <span className="material-symbols-outlined text-[16px] text-blue-500 dark:text-blue-400">quiz</span>
                      Quizzes
-                   </button>
+                   </Link>
                </div>
              )}
            </div>
         </div>
         
+        <div className="p-4 pb-24 border-t border-slate-100 dark:border-white/5 mt-auto">
+           <button 
+             onClick={handleLogout} 
+             className="w-full flex items-center gap-3 px-4 py-3 rounded-xl transition-all font-semibold text-sm text-slate-600 dark:text-slate-400 hover:bg-red-50 dark:hover:bg-red-500/10 hover:text-red-600 dark:hover:text-red-400"
+           >
+             <span className="material-symbols-outlined text-[20px]">logout</span> 
+             Logout
+           </button>
+        </div>
       </aside>
 
       {/* Main Canvas Area */}
@@ -428,10 +515,26 @@ export default function Dashboard() {
           
           {currentView === 'dashboard' ? (
             <div className="max-w-6xl mx-auto">
+              {totalCourses === 0 && (
+                <div className="w-full bg-white/40 dark:bg-slate-900/40 backdrop-blur-xl border border-white/50 dark:border-white/10 rounded-3xl p-8 mb-8 flex flex-col md:flex-row items-center justify-between gap-6 shadow-xl animate-in fade-in slide-in-from-top-4 duration-700">
+                  <div className="flex items-center gap-6">
+                    <div className="w-16 h-16 bg-linear-to-tr from-indigo-500 to-purple-500 rounded-2xl flex items-center justify-center text-white shadow-lg shadow-indigo-500/30 shrink-0">
+                      <span className="material-symbols-outlined text-3xl">auto_awesome</span>
+                    </div>
+                    <div>
+                      <h2 className="text-2xl font-bold font-headline mb-1">Welcome!</h2>
+                      <p className="text-slate-600 dark:text-slate-300 max-w-lg">To unlock your intelligent roadmap and personalized curriculum analytics, please upload your academic syllabus.</p>
+                    </div>
+                  </div>
+                  <Link href="/onboarding" className="bg-slate-900 dark:bg-white text-white dark:text-slate-900 px-8 py-4 rounded-xl font-bold shadow-lg hover:shadow-xl transition-all hover:scale-[1.02] shrink-0">
+                    Upload Syllabus
+                  </Link>
+                </div>
+              )}
               {/* Course Counter */}
               <div className="mb-6 flex items-center gap-2">
                  <p className="text-sm font-semibold text-slate-500 dark:text-slate-400 uppercase tracking-widest flex items-center gap-2">
-                   <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span> Total Enrolled Courses: 4
+                   <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span> Total Enrolled Courses: {totalCourses}
                  </p>
               </div>
 
@@ -446,24 +549,20 @@ export default function Dashboard() {
                       <span className="material-symbols-outlined text-indigo-500">book</span> Theory Courses
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div onClick={() => handleAccess({ id: 'math', title: 'Engineering Math', subtitle: 'MTH101 Module', icon: 'calculate', colorClass: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400' })} className="bg-white dark:bg-slate-900 p-5 rounded-2xl shadow-sm border border-slate-200 dark:border-white/10 hover:border-indigo-300 dark:hover:border-indigo-500/30 transition-colors cursor-pointer">
-                        <div className="flex justify-between items-start mb-3">
-                          <h4 className="font-semibold text-slate-800 dark:text-gray-100">Engineering Math</h4>
-                          <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-1 rounded">MTH101</span>
-                        </div>
-                        <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden mt-4">
-                          <div className="h-full bg-indigo-600 rounded-full w-[78%]"></div>
-                        </div>
-                      </div>
-                      <div onClick={() => handleAccess({ id: 'os', title: 'Operating Systems', subtitle: 'OS202', icon: 'memory', colorClass: 'bg-teal-50 text-teal-600 dark:bg-teal-500/10 dark:text-teal-400' })} className="bg-white dark:bg-slate-900 p-5 rounded-2xl shadow-sm border border-slate-200 dark:border-white/10 hover:border-teal-300 dark:hover:border-teal-500/30 transition-colors cursor-pointer">
-                        <div className="flex justify-between items-start mb-3">
-                          <h4 className="font-semibold text-slate-800 dark:text-gray-100">Operating Systems</h4>
-                          <span className="text-xs font-bold text-teal-600 dark:text-teal-400 bg-teal-50 dark:bg-teal-500/10 px-2 py-1 rounded">OS202</span>
-                        </div>
-                        <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden mt-4">
-                          <div className="h-full bg-teal-600 rounded-full w-[45%]"></div>
-                        </div>
-                      </div>
+                      {theoryMarks.map((mark: any) => (
+                        <Link href={`/courses/${mark.course.id}`} key={mark.id} onClick={() => handleAccess({ id: `course-${mark.course.id}`, title: mark.course.title, subtitle: `${mark.course.code} Module`, icon: 'calculate', colorClass: 'bg-indigo-50 text-indigo-600 dark:bg-indigo-500/10 dark:text-indigo-400' })} className="block bg-white dark:bg-slate-900 p-5 rounded-2xl shadow-sm border border-slate-200 dark:border-white/10 hover:border-indigo-300 dark:hover:border-indigo-500/30 transition-all hover:scale-[1.02] cursor-pointer">
+                          <div className="flex justify-between items-start mb-3">
+                            <h4 className="font-semibold text-slate-800 dark:text-gray-100 line-clamp-1" title={mark.course.title}>{mark.course.title}</h4>
+                            <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 bg-indigo-50 dark:bg-indigo-500/10 px-2 py-1 rounded">{mark.course.code}</span>
+                          </div>
+                          <div className="flex items-center gap-3 mt-4">
+                            <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                              <div className="h-full bg-indigo-600 rounded-full" style={{ width: `${(mark.score / mark.max_score) * 100}%` }}></div>
+                            </div>
+                            <span className="text-xs text-slate-500 dark:text-slate-400 font-bold whitespace-nowrap">{Math.round((mark.score / mark.max_score) * 100)}%</span>
+                          </div>
+                        </Link>
+                      ))}
                     </div>
                   </div>
 
@@ -473,15 +572,20 @@ export default function Dashboard() {
                       <span className="material-symbols-outlined text-orange-500">science</span> Lab Courses
                     </h3>
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                      <div onClick={() => handleAccess({ id: 'hw', title: 'Hardware Lab', subtitle: 'HW101L', icon: 'science', colorClass: 'bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400' })} className="bg-white dark:bg-slate-900 p-5 rounded-2xl shadow-sm border border-slate-200 dark:border-white/10 hover:border-orange-300 dark:hover:border-orange-500/30 transition-colors cursor-pointer">
-                        <div className="flex justify-between items-start mb-3">
-                          <h4 className="font-semibold text-slate-800 dark:text-gray-100">Hardware Lab</h4>
-                          <span className="text-xs font-bold text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10 px-2 py-1 rounded">HW101L</span>
-                        </div>
-                        <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden mt-4">
-                          <div className="h-full bg-orange-500 rounded-full w-[90%]"></div>
-                        </div>
-                      </div>
+                      {labMarks.map((mark: any) => (
+                        <Link href={`/courses/${mark.course.id}`} key={mark.id} onClick={() => handleAccess({ id: `lab-${mark.course.id}`, title: mark.course.title, subtitle: `${mark.course.code}L`, icon: 'science', colorClass: 'bg-orange-50 text-orange-600 dark:bg-orange-500/10 dark:text-orange-400' })} className="block bg-white dark:bg-slate-900 p-5 rounded-2xl shadow-sm border border-slate-200 dark:border-white/10 hover:border-orange-300 dark:hover:border-orange-500/30 transition-all hover:scale-[1.02] cursor-pointer">
+                          <div className="flex justify-between items-start mb-3">
+                            <h4 className="font-semibold text-slate-800 dark:text-gray-100 line-clamp-1" title={mark.course.title}>{mark.course.title} Lab</h4>
+                            <span className="text-xs font-bold text-orange-600 dark:text-orange-400 bg-orange-50 dark:bg-orange-500/10 px-2 py-1 rounded">{mark.course.code}</span>
+                          </div>
+                          <div className="flex items-center gap-3 mt-4">
+                            <div className="w-full h-1.5 bg-slate-100 dark:bg-slate-800 rounded-full overflow-hidden">
+                              <div className="h-full bg-orange-500 rounded-full" style={{ width: `${(mark.score / mark.max_score) * 100}%` }}></div>
+                            </div>
+                            <span className="text-xs text-slate-500 dark:text-slate-400 font-bold whitespace-nowrap">{Math.round((mark.score / mark.max_score) * 100)}%</span>
+                          </div>
+                        </Link>
+                      ))}
                     </div>
                   </div>
                 </div>
@@ -549,7 +653,7 @@ export default function Dashboard() {
                     
                     {riskData?.alert_trigger && (
                         <div className="mt-6">
-                            <button onClick={() => handleAccess({ id: 'risk', title: 'OS Risk Resolution', subtitle: 'Action Item', icon: 'warning', colorClass: 'bg-red-50 text-red-600 dark:bg-red-500/10 dark:text-red-400' })} className="text-sm bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-xl shadow-sm hover:shadow transition-all w-full flex justify-center items-center gap-2">
+                            <button onClick={triggerResolveFlow} className="text-sm bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-xl shadow-sm hover:shadow transition-all w-full flex justify-center items-center gap-2">
                               <span className="material-symbols-outlined text-[18px]">build</span> Resolve Flow
                             </button>
                         </div>
@@ -566,8 +670,9 @@ export default function Dashboard() {
                     <button onClick={() => setIsMarksOpen(true)} className="w-full bg-slate-900 dark:bg-white dark:hover:bg-slate-200 hover:bg-slate-800 text-white dark:text-slate-900 py-3 rounded-xl font-bold transition-colors flex items-center justify-center gap-2 shadow-md">
                       <span className="material-symbols-outlined text-[20px]">add</span> Add Entry
                     </button>
-                 </div>
-              </div>
+                  </div>
+               </div>
+
 
               {/* 100% Width Recently Accessed */}
               <div className="w-full">
@@ -735,6 +840,65 @@ export default function Dashboard() {
             <div className="flex gap-3">
               <button onClick={() => setIsMarksOpen(false)} className="flex-1 py-3 rounded-xl font-semibold border border-slate-200 dark:border-white/10 hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors text-slate-700 dark:text-gray-300">Cancel</button>
               <button onClick={() => setIsMarksOpen(false)} className="flex-1 py-3 rounded-xl font-semibold bg-indigo-600 hover:bg-indigo-700 text-white shadow-md shadow-indigo-600/20 transition-all">Submit</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Resolve Flow Modal */}
+      {isResolveModalOpen && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-4">
+          <div className="absolute inset-0 bg-black/50 backdrop-blur-md transition-opacity" onClick={() => setIsResolveModalOpen(false)}></div>
+          <div className="relative w-full max-w-2xl bg-white dark:bg-slate-900 overflow-hidden flex flex-col max-h-[80vh] rounded-3xl shadow-2xl border border-slate-200 dark:border-white/10 animate-in zoom-in-95 text-slate-900 dark:text-gray-100">
+            <div className="p-6 border-b border-slate-100 dark:border-white/5 flex justify-between items-center bg-slate-50 dark:bg-slate-800/50">
+               <div className="flex items-center gap-3">
+                 <div className="w-10 h-10 rounded-full bg-indigo-100 dark:bg-indigo-500/20 text-indigo-600 dark:text-indigo-400 flex items-center justify-center">
+                   <span className="material-symbols-outlined">smart_toy</span>
+                 </div>
+                 <h3 className="font-headline text-2xl font-bold tracking-tight">AI Recovery Roadmap</h3>
+               </div>
+               <button onClick={() => setIsResolveModalOpen(false)} className="text-slate-400 hover:bg-slate-200 dark:hover:bg-slate-800 p-1.5 rounded-full transition-colors flex items-center justify-center"><span className="material-symbols-outlined">close</span></button>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto p-8 whitespace-pre-wrap text-[15px] leading-relaxed text-slate-700 dark:text-slate-300">
+               {roadmapStatus === 'checking' && (
+                 <div className="flex flex-col items-center justify-center py-12">
+                   <span className="material-symbols-outlined animate-spin text-4xl text-indigo-500 mb-4">progress_activity</span>
+                   <p className="font-semibold uppercase tracking-widest text-slate-500 text-xs">Checking Systems...</p>
+                 </div>
+               )}
+               
+               {roadmapStatus === 'prompt' && (
+                 <div className="flex flex-col items-center justify-center py-12 text-center max-w-sm mx-auto">
+                   <div className="w-16 h-16 bg-indigo-50 dark:bg-indigo-500/10 text-indigo-500 rounded-full flex items-center justify-center mb-6">
+                      <span className="material-symbols-outlined text-[32px]">history</span>
+                   </div>
+                   <h4 className="text-xl font-bold mb-4">Saved Roadmap Found</h4>
+                   <p className="text-sm text-slate-500 dark:text-slate-400 mb-8">We found a saved recovery roadmap for you. Would you like to view it, or generate a new one based on your latest grades?</p>
+                   
+                   <div className="flex flex-col sm:flex-row gap-3 w-full">
+                     <button onClick={() => setRoadmapStatus('viewing')} className="flex-1 py-3 rounded-xl border border-slate-200 dark:border-white/10 font-semibold hover:bg-slate-50 dark:hover:bg-slate-800 transition-colors">View Saved</button>
+                     <button onClick={generateNewRoadmap} className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl font-semibold shadow-sm transition-colors">Generate New</button>
+                   </div>
+                 </div>
+               )}
+
+               {roadmapStatus === 'generating' && (
+                 <div className="flex flex-col items-center justify-center py-12">
+                   <span className="material-symbols-outlined animate-spin text-4xl text-indigo-500 mb-4">progress_activity</span>
+                   <p className="font-semibold uppercase tracking-widest text-slate-500 text-xs">Generating Recovery Plan...</p>
+                 </div>
+               )}
+
+               {roadmapStatus === 'viewing' && (
+                 <div className="prose prose-sm sm:prose-base dark:prose-invert max-w-none prose-headings:font-headline prose-p:leading-relaxed prose-a:text-indigo-600 dark:prose-a:text-indigo-400">
+                   <ReactMarkdown>{roadmapData}</ReactMarkdown>
+                 </div>
+               )}
+            </div>
+
+            <div className="p-5 border-t border-slate-100 dark:border-white/5 bg-slate-50 dark:bg-slate-800/50 flex justify-end">
+               <button onClick={() => setIsResolveModalOpen(false)} className="bg-indigo-600 hover:bg-indigo-700 text-white font-bold py-2.5 px-8 rounded-xl transition-colors shadow-sm">{roadmapStatus === 'prompt' ? 'Cancel' : 'Acknowledge'}</button>
             </div>
           </div>
         </div>

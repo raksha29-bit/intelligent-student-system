@@ -6,3 +6,9 @@ scikit-learn
 qdrant-client
 sentence-transformers
 pydantic
+sqlmodel
+alembic
+faker
+passlib[bcrypt]
+aiosqlite
+Pillow

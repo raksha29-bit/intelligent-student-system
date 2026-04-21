@@ -1,17 +1,30 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, Depends, HTTPException, status, UploadFile, File
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 import os
 import google.generativeai as genai
 from dotenv import load_dotenv
+from sqlmodel.ext.asyncio.session import AsyncSession
+from sqlmodel import select
+from sqlalchemy.orm import selectinload
+import bcrypt
+import json
+import io
+import PyPDF2
+import random
+from PIL import Image
 
 load_dotenv()
-genai.configure(api_key=os.environ.get("GEMINI_API_KEY"))
+api_keys = [os.getenv("GEMINI_API_KEY_1"), os.getenv("GEMINI_API_KEY_2")]
+api_keys = [k for k in api_keys if k] or [os.getenv("GEMINI_API_KEY")]
 
 from ml_pipelines.nlp_chatbot.chatbot import process_chat_message
 from ml_pipelines.risk_engine.predictor import predict_academic_risk
 from ml_pipelines.recommendations.embedding import get_recommendations
 from database.mock_data import mock_user_profile, mock_marks
+from app.core.database import get_session
+from app.models import User, Course, Mark, ChatHistory, Assignment, TimetableSlot, Exam, Quiz
+from ml_engine import train_and_predict_risk
 
 app = FastAPI()
 
@@ -24,8 +37,20 @@ app.add_middleware(
     allow_headers=["*"], # Allows all headers
 )
 
+class LoginRequest(BaseModel):
+    username: str
+    password: str
+
+class RegisterRequest(BaseModel):
+    username: str
+    email: str
+    password: str
+    full_name: str
+    branch: str = "AIML"
+
 class ChatRequest(BaseModel):
     message: str
+    user_id: str = "1"
 
 class ChatMessage(BaseModel):
     message: str
@@ -50,11 +75,246 @@ class MarkInput(BaseModel):
     exam_type: str
     score: float
 
+class AssessmentUpdate(BaseModel):
+    score: float
+
+class TargetSGPARequest(BaseModel):
+    target_sgpa: float = 8.5
+
 # --- Phase 1: Core System MVP Routes ---
 
-@app.post("/api/login")
-async def login():
-    return {"status": "success", "token": "mock-jwt-token-123"}
+@app.post("/api/onboarding/upload")
+async def onboarding_upload(file: UploadFile = File(...), session: AsyncSession = Depends(get_session)):
+    # 1. Read file
+    content = await file.read()
+    text = ""
+    img = None
+
+    if file.content_type.startswith("image/"):
+        img = Image.open(io.BytesIO(content))
+    elif file.filename.endswith(".pdf"):
+        pdf_reader = PyPDF2.PdfReader(io.BytesIO(content))
+        for page in pdf_reader.pages:
+            text += page.extract_text() + "\n"
+    else:
+        text = content.decode("utf-8", errors="ignore")
+        
+    # 2. Database - Create New User
+    new_username = f"Student_{random.randint(1000, 99999)}"
+    new_user = User(
+        username=new_username,
+        email=f"{new_username.lower()}@example.com",
+        role="student",
+        hashed_password=bcrypt.hashpw("password".encode('utf-8'), bcrypt.gensalt()).decode()
+    )
+    session.add(new_user)
+    await session.commit()
+    await session.refresh(new_user)
+    new_user_id = new_user.id
+
+    # 3. AI Processing
+    prompt = f"""
+    You are an academic curriculum parser. Extract the courses and syllabus topics from the provided text.
+    Return a strict JSON format containing exactly an array of objects matching this structure:
+    [
+        {{"course_code": "...", "title": "...", "credits": X, "type": "...", "syllabus_topics": ["...", "..."], "assessments": [{{"name": "...", "max_marks": X}}]}}
+    ]
+    Rules:
+    - 'type': If title contains "Lab", "Practical", or "Experimental", type is "lab". If "Project", "Seminar", or "Internship", type is "other". Else "theory".
+    - 'assessments': Extract from the grading table (e.g., Minor I, Minor II, Quiz, Major). max_marks is the total marks for that specific piece.
+
+    Return ONLY a raw JSON array. Do not wrap the response in ```json markdown blocks. No introductory text.
+    Text:
+    {text}
+    """
+    
+    ai_text = ""
+    courses_data = []
+    for key in api_keys:
+        try:
+            genai.configure(api_key=key)
+            model = genai.GenerativeModel("gemini-2.5-flash")
+            if img:
+                resp = model.generate_content([prompt, img])
+            else:
+                resp = model.generate_content(prompt)
+            ai_text = resp.text.strip()
+            ai_text = ai_text.replace("```json", "").replace("```", "").strip()
+            courses_data = json.loads(ai_text)
+            break
+        except Exception as e:
+            print(f"Key failed, rotating to next key... Error: {e}")
+    else:
+        courses_data = [{"course_code": "GEN101", "title": "General Demo Course", "credits": 3, "type": "theory", "syllabus_topics": ["Welcome", "Introduction"], "assessments": [{"name": "Midterm", "max_marks": 30}, {"name": "Final", "max_marks": 70}]}]
+
+    # 4. Database - Mapping
+    for cd in courses_data:
+        code = cd.get("course_code")
+        title = cd.get("title")
+        credits = cd.get("credits", 3)
+        topics = cd.get("syllabus_topics", [])
+        
+        res = await session.execute(select(Course).where(Course.code == code))
+        course = res.scalars().first()
+        
+        if not course:
+            course = Course(
+                code=code,
+                title=title,
+                credits=credits,
+                syllabus_topics=json.dumps(topics)
+            )
+            session.add(course)
+            await session.commit()
+            await session.refresh(course)
+        else:
+            if topics:
+                course.syllabus_topics = json.dumps(topics)
+                session.add(course)
+                await session.commit()
+                
+        mark = Mark(
+            score=None,
+            max_score=sum([a.get("max_marks", 0) for a in cd.get("assessments", [])]) or 100.0,
+            type=cd.get("type", "theory"),
+            student_id=new_user_id,
+            course_id=course.id
+        )
+        session.add(mark)
+        
+        # Create Child Assessments
+        for a_data in cd.get("assessments", []):
+            quiz = Quiz(
+                course_id=course.id,
+                student_id=new_user_id,
+                title=a_data.get("name"),
+                total_questions=a_data.get("max_marks", 10),
+                score=None,
+                status="Pending"
+            )
+            session.add(quiz)
+        
+    await session.commit()
+    
+    return {"status": "success", "new_user_id": new_user_id, "courses_parsed": len(courses_data)}
+
+# --- Phase 1: Core System MVP Routes ---
+
+@app.post("/api/auth/register")
+async def register(req: RegisterRequest, session: AsyncSession = Depends(get_session)):
+    # Check if user already exists
+    existing_user = await session.execute(select(User).where((User.username == req.username) | (User.email == req.email)))
+    if existing_user.scalars().first():
+        raise HTTPException(status_code=400, detail="Username or email already registered")
+
+    hashed = bcrypt.hashpw(req.password.encode('utf-8'), bcrypt.gensalt()).decode()
+    new_user = User(
+        username=req.username,
+        email=req.email,
+        hashed_password=hashed,
+        role="student",
+        branch=req.branch
+    )
+    session.add(new_user)
+    await session.commit()
+    await session.refresh(new_user)
+    return {"status": "success", "user_id": new_user.id}
+
+@app.post("/api/auth/login")
+async def login(req: LoginRequest, session: AsyncSession = Depends(get_session)):
+    # Allow username or email
+    result = await session.execute(select(User).where((User.username == req.username) | (User.email == req.username)))
+    user = result.scalars().first()
+    
+    if not user:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+        
+    try:
+        is_valid = bcrypt.checkpw(req.password.encode('utf-8'), user.hashed_password.encode('utf-8'))
+    except Exception:
+        is_valid = False
+
+    if not is_valid:
+        raise HTTPException(status_code=401, detail="Invalid username or password")
+
+    return {
+        "status": "success", 
+        "user_id": user.id,
+        "message": "Login successful"
+    }
+
+@app.get("/api/dashboard/{user_id}")
+async def get_dashboard(user_id: int, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(User).where(User.id == user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    marks_result = await session.execute(
+        select(Mark)
+        .where(Mark.student_id == user_id)
+        .options(selectinload(Mark.course))
+    )
+    marks = marks_result.scalars().all()
+    
+    quizzes_result = await session.execute(select(Quiz).where(Quiz.student_id == user_id))
+    all_quizzes = quizzes_result.scalars().all()
+    assignments_result = await session.execute(select(Assignment).where(Assignment.student_id == user_id))
+    all_assignments = assignments_result.scalars().all()
+
+    marks_data = []
+    for m in marks:
+        course_quizzes_all = [q for q in all_quizzes if q.course_id == m.course_id]
+        course_assignments = [a for a in all_assignments if a.course_id == m.course_id]
+        
+        breakdown = []
+        if course_quizzes_all:
+            # We have extracted assessments!
+            for q in course_quizzes_all:
+                score_display = f"{q.score}/{q.total_questions}" if q.score is not None else f"Pending/{q.total_questions}"
+                breakdown.append({
+                    "id": q.id,
+                    "name": q.title, 
+                    "score_display": score_display,
+                    "raw_score": q.score,
+                    "max_score": q.total_questions
+                })
+            for a in course_assignments[:2]:
+                breakdown.append({"name": a.title, "score": f"Status: {a.status}"})
+        else:
+            # Sparse data fallback (for seeds or manual additions)
+            safe_score = m.score if m.score is not None else 0.0
+            safe_max_score = m.max_score if m.max_score is not None else 100.0
+            breakdown = [
+                {"name": "Midterm Exam", "score_display": f"{round(safe_score * 0.3, 1)}/{round(safe_max_score * 0.3, 1)}"},
+                {"name": "Assignments", "score_display": "TBD"},
+                {"name": "Final Evaluation", "score_display": f"{round(safe_score * 0.5, 1)}/{round(safe_max_score * 0.5, 1)}"}
+            ]
+
+        marks_data.append({
+            "id": m.id,
+            "score": m.score,
+            "max_score": m.max_score,
+            "type": m.type,
+            "breakdown": breakdown,
+            "course": {
+                "id": m.course.id,
+                "code": m.course.code,
+                "title": m.course.title,
+                "credits": m.course.credits
+            }
+        })
+        
+    return {
+        "status": "success",
+        "user": {
+            "id": user.id,
+            "username": user.username,
+            "email": user.email,
+            "role": user.role
+        },
+        "marks": marks_data
+    }
 
 @app.post("/api/signup")
 async def signup():
@@ -78,20 +338,464 @@ async def view_marks(subject: str):
 # --- Existing ML Pipeline Routes ---
 
 @app.post("/api/chat")
-async def chat_endpoint(request: ChatRequest):
-    model = genai.GenerativeModel("gemini-2.5-flash", system_instruction="You are Luminary AI, an expert, encouraging academic tutor integrated into a university learning management system. Provide concise, helpful answers.")
-    chat_response = model.generate_content(request.message)
-    return {"response": chat_response.text}
+async def chat_endpoint(request: ChatRequest, session: AsyncSession = Depends(get_session)):
+    real_user_id = 1 if str(request.user_id) == "STU-101" else (int(request.user_id) if str(request.user_id).isdigit() else 1)
+    
+    # Save user message
+    user_chat = ChatHistory(message=request.message, sender="user", user_id=real_user_id)
+    session.add(user_chat)
+    await session.commit()
+    
+    # Context Injection
+    marks_result = await session.execute(
+        select(Mark)
+        .where(Mark.student_id == real_user_id)
+        .options(selectinload(Mark.course))
+    )
+    marks = marks_result.scalars().all()
+    context = "User's academic context:\n"
+    for m in marks:
+        context += f"- {m.course.title} ({m.course.code}): {m.score}/{m.max_score} ({m.type})\n"
+        
+    try:
+        model = genai.GenerativeModel("gemini-2.5-flash", system_instruction=f"You are Luminary AI, an expert, encouraging academic tutor integrated into a university learning management system. Provide concise, helpful answers. Here is the student's academic context:\n{context}")
+        chat_response = model.generate_content(request.message)
+        ai_reply = chat_response.text
+    except Exception as e:
+        print(f"Gemini API Error: {e}")
+        ai_reply = "The AI tutor is currently resting, saving your query..."
+        
+    # Save AI message
+    ai_chat = ChatHistory(message=ai_reply, sender="ai", user_id=real_user_id)
+    session.add(ai_chat)
+    await session.commit()
+    
+    return {"response": ai_reply}
+
+@app.get("/api/risk/predict/{user_id}")
+async def risk_predict_endpoint_get(user_id: str, session: AsyncSession = Depends(get_session)):
+    real_user_id = 1 if user_id == "STU-101" else (int(user_id) if user_id.isdigit() else 1)
+    
+    # 1. Get Numerical Predictions from Native ML Engine
+    predictions = await train_and_predict_risk(real_user_id, session)
+    
+    # 2. Generate NLG Strategy via Gemini
+    ml_summary = ". ".join([f"{p['course_code']}: {p['predicted_score']}%" for p in predictions])
+    assessment = ""
+    alert_trigger = any([p['predicted_score'] < 50 for p in predictions]) if predictions else False
+    
+    for key in api_keys:
+        try:
+            genai.configure(api_key=key)
+            model = genai.GenerativeModel("gemini-2.5-flash")
+            prompt = f"You are an academic advisor. Our native ML model predicts this student will score the following on their upcoming exams based on their current trajectory: {ml_summary}. Write a 2-sentence encouraging strategy to help them improve, mentioning these exact predicted numbers."
+            response = model.generate_content(prompt)
+            assessment = response.text.strip()
+            break
+        except Exception as e:
+            print(f"Gemini NLG Error: {e}")
+            continue
+    else:
+        # Fallback if Gemini fails
+        assessment = f"Keep up the hard work to hit your targets: {ml_summary}. Focus on consistent practice to improve your current trajectory."
+
+    return {"alert_trigger": alert_trigger, "details": assessment}
+
+@app.get("/api/risk/roadmap/check/{user_id}")
+async def risk_roadmap_check(user_id: str, session: AsyncSession = Depends(get_session)):
+    real_user_id = 1 if user_id == "STU-101" else (int(user_id) if user_id.isdigit() else 1)
+    result = await session.execute(select(User).where(User.id == real_user_id))
+    user = result.scalars().first()
+    if user and user.saved_roadmap:
+        return {"has_saved": True, "roadmap": user.saved_roadmap}
+    return {"has_saved": False}
+
+@app.post("/api/risk/roadmap/generate/{user_id}")
+async def risk_roadmap_generate(user_id: str, session: AsyncSession = Depends(get_session)):
+    real_user_id = 1 if user_id == "STU-101" else (int(user_id) if user_id.isdigit() else 1)
+    
+    result = await session.execute(select(User).where(User.id == real_user_id))
+    user = result.scalars().first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+        
+    marks_result = await session.execute(
+        select(Mark)
+        .where(Mark.student_id == real_user_id)
+        .options(selectinload(Mark.course))
+    )
+    marks = marks_result.scalars().all()
+    
+    context = "User's marks:\n"
+    for m in marks:
+        context += f"- {m.course.title} ({m.course.code}): {m.score}/{m.max_score} ({m.type})\n"
+        
+    try:
+        model = genai.GenerativeModel("gemini-2.5-flash")
+        prompt = f"""You are an empathetic, expert academic advisor for engineering students.
+Based on the following student performance, you must provide a highly structured response using Markdown with the following EXACT sections:
+
+## Comfort & Reassurance
+[A personalized, empathetic opening to make the student feel heard and valued.]
+
+## Grade Analysis
+[Explicitly mention their failing subjects by name and acknowledge where they are doing well.]
+
+## Strategic Roadmap
+[A detailed, prioritized, bulleted study plan.]
+
+## Execution Strategy
+[Actionable advice on how to actually study (e.g., Pomodoro, finding YouTube resources, practicing specific numericals).]
+
+Ensure you generate at least 3-4 distinct paragraphs. Do not deviate from these headers.
+
+Context:
+{context}"""
+        response = model.generate_content(prompt)
+        roadmap = response.text
+    except Exception as e:
+        print(f"Gemini API Error: {e}")
+        roadmap = "I know things might seem challenging right now, but you are more capable than your current grades reflect. Here is a quick 3-step plan: 1. Review your lowest marked subject carefully. 2. Focus on conceptual understanding before practicing. 3. Reach out to your TA or professor for specific guidance. You've got this, don't give up!"
+
+    user.saved_roadmap = roadmap
+    session.add(user)
+    await session.commit()
+    await session.refresh(user)
+
+    return {"roadmap": roadmap}
 
 @app.post("/api/risk/predict")
-async def risk_predict_endpoint(request: RiskProfileRequest):
-    result = predict_academic_risk(request.student_id, request.marks, request.attendance)
-    return result
+async def risk_predict_endpoint_post(request: RiskProfileRequest):
+    return {"alert_trigger": False, "details": "Please use the new GET /api/risk/predict/{user_id} endpoint for AI recommendations."}
 
 @app.post("/api/recommendations")
 async def recommendations_endpoint(request: RecommendationRequest):
     resources = get_recommendations(request.query)
     return {"resources": resources}
+
+@app.get("/api/assignments/{user_id}")
+async def get_assignments(user_id: str, session: AsyncSession = Depends(get_session)):
+    real_user_id = 1 if user_id == "STU-101" else (int(user_id) if user_id.isdigit() else 1)
+    
+    result = await session.execute(
+        select(Assignment)
+        .where(Assignment.student_id == real_user_id)
+        .options(selectinload(Assignment.course))
+    )
+    assignments = result.scalars().all()
+    
+    data = []
+    for a in assignments:
+        data.append({
+            "id": a.id,
+            "title": a.title,
+            "due_date": a.due_date,
+            "status": a.status,
+            "course": {
+                "id": a.course.id,
+                "code": a.course.code,
+                "title": a.course.title
+            }
+        })
+        
+    return {"status": "success", "assignments": data}
+
+@app.get("/api/timetable/{user_id}")
+async def get_timetable(user_id: str, session: AsyncSession = Depends(get_session)):
+    real_user_id = 1 if user_id == "STU-101" else (int(user_id) if user_id.isdigit() else 1)
+    
+    marks_result = await session.execute(
+        select(Mark).where(Mark.student_id == real_user_id)
+    )
+    marks = marks_result.scalars().all()
+    course_ids = list(set([m.course_id for m in marks]))
+    
+    slots_result = await session.execute(
+        select(TimetableSlot)
+        .where(TimetableSlot.course_id.in_(course_ids))
+        .options(selectinload(TimetableSlot.course))
+    )
+    slots = slots_result.scalars().all()
+    
+    data = []
+    for s in slots:
+        data.append({
+            "id": s.id,
+            "day_of_week": s.day_of_week,
+            "start_time": s.start_time,
+            "end_time": s.end_time,
+            "room_number": s.room_number,
+            "course": {
+                "id": s.course.id,
+                "code": s.course.code,
+                "title": s.course.title
+            }
+        })
+        
+    return {"status": "success", "timetable": data}
+
+@app.get("/api/exams/{user_id}")
+async def get_exams(user_id: str, session: AsyncSession = Depends(get_session)):
+    real_user_id = 1 if user_id == "STU-101" else (int(user_id) if user_id.isdigit() else 1)
+    
+    marks_result = await session.execute(
+        select(Mark).where(Mark.student_id == real_user_id)
+    )
+    marks = marks_result.scalars().all()
+    course_ids = list(set([m.course_id for m in marks]))
+    
+    exams_result = await session.execute(
+        select(Exam)
+        .where(Exam.course_id.in_(course_ids))
+        .options(selectinload(Exam.course))
+    )
+    exams = exams_result.scalars().all()
+    
+    data = []
+    for e in exams:
+        data.append({
+            "id": e.id,
+            "title": e.title,
+            "exam_date": e.exam_date.isoformat(),
+            "duration_minutes": e.duration_minutes,
+            "location": e.location,
+            "course": {
+                "id": e.course.id,
+                "code": e.course.code,
+                "title": e.course.title
+            }
+        })
+        
+    return {"status": "success", "exams": data}
+
+@app.get("/api/quizzes/{user_id}")
+async def get_quizzes(user_id: str, session: AsyncSession = Depends(get_session)):
+    real_user_id = 1 if user_id == "STU-101" else (int(user_id) if user_id.isdigit() else 1)
+    
+    quizzes_result = await session.execute(
+        select(Quiz)
+        .where(Quiz.student_id == real_user_id)
+        .options(selectinload(Quiz.course))
+    )
+    quizzes = quizzes_result.scalars().all()
+    
+    data = []
+    for q in quizzes:
+        data.append({
+            "id": q.id,
+            "title": q.title,
+            "total_questions": q.total_questions,
+            "score": q.score,
+            "status": q.status,
+            "course": {
+                "id": q.course.id,
+                "code": q.course.code,
+                "title": q.course.title
+            }
+        })
+        
+    return {"status": "success", "quizzes": data}
+
+@app.get("/api/courses/{course_id}/student/{user_id}")
+async def get_course_details(course_id: int, user_id: str, session: AsyncSession = Depends(get_session)):
+    real_user_id = 1 if user_id == "STU-101" else (int(user_id) if user_id.isdigit() else 1)
+    
+    course_result = await session.execute(select(Course).where(Course.id == course_id))
+    course = course_result.scalar_one_or_none()
+    
+    if not course:
+        return {"status": "error", "message": "Course not found"}
+        
+    marks_result = await session.execute(
+        select(Mark)
+        .where(Mark.course_id == course_id)
+        .where(Mark.student_id == real_user_id)
+    )
+    marks = marks_result.scalars().all()
+    
+    # Dynamic Syllabus
+    syllabus = []
+    if course.code == "CS301":
+        syllabus = [
+            {"week": 1, "topic": "Sorting Algorithms", "status": "completed"},
+            {"week": 2, "topic": "Graph Theory", "status": "completed"},
+            {"week": 3, "topic": "Dynamic Programming", "status": "in_progress"},
+            {"week": 4, "topic": "Greedy Algorithms", "status": "upcoming"},
+            {"week": 5, "topic": "NP-Completeness", "status": "upcoming"}
+        ]
+    elif course.code == "CS304":
+        syllabus = [
+            {"week": 1, "topic": "Relational Algebra", "status": "completed"},
+            {"week": 2, "topic": "SQL Queries", "status": "completed"},
+            {"week": 3, "topic": "Normalization", "status": "in_progress"},
+            {"week": 4, "topic": "Transaction Management", "status": "upcoming"},
+            {"week": 5, "topic": "Concurrency Control", "status": "upcoming"}
+        ]
+    elif "AI303" in course.code:
+        syllabus = [
+            {"week": 1, "topic": "Neural Networks", "status": "completed"},
+            {"week": 2, "topic": "Supervised Learning", "status": "completed"},
+            {"week": 3, "topic": "Unsupervised Learning", "status": "in_progress"},
+            {"week": 4, "topic": "Deep Learning", "status": "upcoming"},
+            {"week": 5, "topic": "Reinforcement Learning", "status": "upcoming"}
+        ]
+    else:
+        syllabus = [
+            {"week": 1, "topic": "Introduction & Fundamentals", "status": "completed"},
+            {"week": 2, "topic": "Core Architecture & Ecosystem", "status": "completed"},
+            {"week": 3, "topic": "Advanced Implementation Strategies", "status": "in_progress"},
+            {"week": 4, "topic": "Performance Optimization & Review", "status": "upcoming"},
+            {"week": 5, "topic": "Final Project Integration", "status": "upcoming"}
+        ]
+        
+    # Assessment Breakdown: Query the Quiz and Assignment tables
+    quizzes_result = await session.execute(
+        select(Quiz)
+        .where(Quiz.course_id == course_id)
+        .where(Quiz.student_id == real_user_id)
+    )
+    quizzes = quizzes_result.scalars().all()
+    
+    assignments_result = await session.execute(
+        select(Assignment)
+        .where(Assignment.course_id == course_id)
+        .where(Assignment.student_id == real_user_id)
+    )
+    assignments = assignments_result.scalars().all()
+    
+    assessments = []
+    for q in quizzes:
+        assessments.append({
+            "id": f"q_{q.id}",
+            "type": "Quiz",
+            "title": q.title,
+            "status": q.status,
+            "score": q.score,
+            "max_score": q.total_questions  # assuming total_questions is max score
+        })
+        
+    for a in assignments:
+        assessments.append({
+            "id": f"a_{a.id}",
+            "type": "Assignment",
+            "title": a.title,
+            "status": a.status,
+            "score": None, # Assign grades logic missing from model, so we set null
+            "max_score": None
+        })
+    
+    return {
+        "status": "success",
+        "course": {
+            "id": course.id,
+            "title": course.title,
+            "code": course.code,
+            "credits": course.credits
+        },
+        "marks": [
+            {"id": m.id, "type": m.type, "score": m.score, "max_score": m.max_score}
+            for m in marks
+        ],
+        "syllabus": syllabus,
+        "assessments": assessments
+    }
+
+@app.post("/api/risk/predict-target/{user_id}")
+async def predict_target_endpoint(user_id: int, req: TargetSGPARequest, session: AsyncSession = Depends(get_session)):
+    # 1. Gather Data
+    marks_result = await session.execute(
+        select(Mark).where(Mark.student_id == user_id).options(selectinload(Mark.course))
+    )
+    marks = marks_result.scalars().all()
+    
+    quizzes_result = await session.execute(select(Quiz).where(Quiz.student_id == user_id))
+    all_quizzes = quizzes_result.scalars().all()
+    
+    course_context = []
+    for m in marks:
+        q_list = [q for q in all_quizzes if q.course_id == m.course_id]
+        graded = [{"name": q.title, "score": q.score, "max": q.total_questions} for q in q_list if q.score is not None]
+        pending = [{"name": q.title, "max": q.total_questions} for q in q_list if q.score is None]
+        course_context.append({
+             "code": m.course.code,
+             "name": m.course.title,
+             "credits": m.course.credits,
+             "graded_assessments": graded,
+             "pending_assessments": pending
+        })
+
+    # 2. AI Oracle Call
+    prompt = f"""
+    You are the Luminary AI Oracle, an expert academic strategist.
+    A student wants to achieve an SGPA of {req.target_sgpa}.
+    
+    Current Academic Context:
+    {json.dumps(course_context, indent=2)}
+    
+    Tasks:
+    1. Calculate the total required grade points across all courses to reach the target SGPA.
+    2. Distribute the necessary 'required scores' for the pending assessments in each course.
+    3. Ensure the required scores are realistic (never exceeding the 'max' limit for that assessment).
+    
+    Return ONLY a raw JSON array of objects with these keys: 
+    - course_code
+    - assessment_name
+    - required_score (float, 1 decimal place)
+    
+    Output example: [{{"course_code": "CS101", "assessment_name": "Major Exam", "required_score": 28.5}}]
+    If it's mathematically impossible, return an empty array.
+    """
+    
+    predictions = []
+    for key in api_keys:
+        try:
+            genai.configure(api_key=key)
+            model = genai.GenerativeModel("gemini-2.5-flash")
+            resp = model.generate_content(prompt)
+            raw_text = resp.text.strip().replace("```json", "").replace("```", "").strip()
+            predictions = json.loads(raw_text)
+            break
+        except Exception as e:
+            print(f"Key failed in Oracle, rotating... Error: {e}")
+    else:
+        # Fallback if AI fails
+        predictions = []
+
+    return {"status": "success", "predictions": predictions}
+
+@app.patch("/api/assessments/{assessment_id}")
+async def update_assessment(assessment_id: int, req: AssessmentUpdate, session: AsyncSession = Depends(get_session)):
+    result = await session.execute(select(Quiz).where(Quiz.id == assessment_id))
+    quiz = result.scalars().first()
+    if not quiz:
+        raise HTTPException(status_code=404, detail="Assessment not found")
+    
+    quiz.score = int(req.score)
+    quiz.status = "Graded"
+    session.add(quiz)
+    await session.commit()
+    await session.refresh(quiz)
+    
+    # Recalculate Mark.score
+    marks_result = await session.execute(
+        select(Mark)
+        .where(Mark.student_id == quiz.student_id)
+        .where(Mark.course_id == quiz.course_id)
+    )
+    mark = marks_result.scalars().first()
+    if mark:
+        all_quizzes_res = await session.execute(
+            select(Quiz)
+            .where(Quiz.student_id == quiz.student_id)
+            .where(Quiz.course_id == quiz.course_id)
+        )
+        all_quizzes = all_quizzes_res.scalars().all()
+        new_total = sum([q.score for q in all_quizzes if q.score is not None])
+        mark.score = float(new_total)
+        session.add(mark)
+        await session.commit()
+    
+    return {"status": "success", "new_total": mark.score if mark else None}
 
 @app.get("/health")
 def health_check():
