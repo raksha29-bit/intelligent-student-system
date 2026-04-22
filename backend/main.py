@@ -399,26 +399,44 @@ async def risk_predict_endpoint_get(user_id: str, session: AsyncSession = Depend
     # 1. Get Numerical Predictions from Native ML Engine
     predictions = await train_and_predict_risk(real_user_id, session)
     
-    # 2. Generate NLG Strategy via Gemini
+    # 2. Determine State First
+    if not predictions:
+        risk_level = "SAFE"
+        avg_score = 100.0
+    else:
+        avg_score = sum(p['predicted_score'] for p in predictions) / len(predictions)
+        if avg_score < 40:
+            risk_level = "CRITICAL"
+        elif avg_score < 60:
+            risk_level = "WARNING"
+        else:
+            risk_level = "SAFE"
+            
     ml_summary = ". ".join([f"{p['course_code']}: {p['predicted_score']}%" for p in predictions])
-    assessment = ""
-    alert_trigger = any([p['predicted_score'] < 50 for p in predictions]) if predictions else False
     
+    # Generic Fallbacks
+    fallbacks = {
+        "CRITICAL": f"CRITICAL: Multiple modules are below passing trajectory. Immediate curriculum intervention is recommended to recover academic standing. Forecast: {ml_summary}",
+        "WARNING": f"WARNING: Some modules require attention. Consider reviewing your study plan. Forecast: {ml_summary}",
+        "SAFE": f"Academic trajectory is stable. Keep up the good work! Forecast: {ml_summary}"
+    }
+
+    final_text = ""
     for key in api_keys:
         try:
             client = genai.Client(api_key=key)
-            prompt = f"You are an academic advisor. Our native ML model predicts this student will score the following on their upcoming exams based on their current trajectory: {ml_summary}. Write a 2-sentence encouraging strategy to help them improve, mentioning these exact predicted numbers."
+            prompt = f"You are an academic advisor. The student's overall risk level is {risk_level} with an average predicted score of {round(avg_score, 1)}%. Our native ML model predicts: {ml_summary}. Write a 2-sentence encouraging strategy to help them improve or maintain their grades, mentioning these exact predicted numbers."
             response = client.models.generate_content(model="gemini-2.0-flash", contents=prompt)
-            assessment = response.text.strip()
+            final_text = response.text.strip()
             break
         except Exception as e:
             print(f"Gemini NLG Error in Risk Radar: {e}")
             continue
     else:
-        # Fallback if Gemini fails
-        assessment = f"Keep up the hard work to hit your targets: {ml_summary}. Focus on consistent practice to improve your current trajectory."
+        # Fallback if Gemini fails (e.g. 429 Rate Limit)
+        final_text = fallbacks.get(risk_level, fallbacks["SAFE"])
 
-    return {"alert_trigger": alert_trigger, "details": assessment}
+    return {"riskLevel": risk_level, "details": final_text}
 
 @app.get("/api/risk/roadmap/check/{user_id}")
 async def risk_roadmap_check(user_id: str, session: AsyncSession = Depends(get_session)):
@@ -486,6 +504,57 @@ Context:
 @app.post("/api/risk/predict")
 async def risk_predict_endpoint_post(request: RiskProfileRequest):
     return {"alert_trigger": False, "details": "Please use the new GET /api/risk/predict/{user_id} endpoint for AI recommendations."}
+
+@app.get("/api/risk/predict_sgpa/{user_id}")
+async def risk_predict_sgpa(user_id: str, session: AsyncSession = Depends(get_session)):
+    try:
+        real_user_id = 1 if user_id == "STU-101" else (int(user_id) if user_id.isdigit() else 1)
+        
+        marks_result = await session.execute(
+            select(Mark).where(Mark.student_id == real_user_id).options(selectinload(Mark.course))
+        )
+        marks = marks_result.scalars().all()
+        
+        predictions = await train_and_predict_risk(real_user_id, session)
+        pred_map = {p["course_code"]: p["predicted_score"] for p in predictions}
+        
+        total_credits = 0
+        total_grade_points = 0
+        
+        for m in marks:
+            course = m.course
+            credits = course.credits or 3
+            
+            # Using our existing prediction function's output
+            predicted_major = pred_map.get(course.code, 0.0) 
+            internal_marks = float(m.score) if m.score else 0.0
+            
+            total_estimated_marks = min(predicted_major + internal_marks, 100.0)
+            
+            if total_estimated_marks >= 90:
+                grade_point = 10
+            elif total_estimated_marks >= 80:
+                grade_point = 9
+            elif total_estimated_marks >= 70:
+                grade_point = 8
+            elif total_estimated_marks >= 60:
+                grade_point = 7
+            elif total_estimated_marks >= 50:
+                grade_point = 6
+            elif total_estimated_marks >= 40:
+                grade_point = 5
+            else:
+                grade_point = 0 # FAIL condition
+                
+            total_credits += credits
+            total_grade_points += (credits * grade_point)
+            
+        sgpa = total_grade_points / total_credits if total_credits > 0 else 0.0
+        return {"predicted_sgpa": round(sgpa, 2)}
+        
+    except Exception as e:
+        print(f"Error predicting SGPA: {e}")
+        return {"predicted_sgpa": 0.0}
 
 @app.post("/api/recommendations")
 async def recommendations_endpoint(request: RecommendationRequest):

@@ -46,7 +46,7 @@ def get_realistic_name():
     return random.choice(all_names)
 
 def seed_data():
-    print("🚀 Initializing mock data generation...")
+    print("Initializing mock data generation...")
     
     # Drop and recreate tables
     SQLModel.metadata.drop_all(engine)
@@ -66,7 +66,7 @@ def seed_data():
             db_courses.append(course)
         session.commit()
         for c in db_courses: session.refresh(c)
-        print(f"✅ Seeded {len(db_courses)} courses.")
+        print(f"Seeded {len(db_courses)} courses.")
 
         # 3. Seed Timetable Slots (Course-wide)
         days = ["Monday", "Tuesday", "Wednesday", "Thursday", "Friday"]
@@ -85,7 +85,7 @@ def seed_data():
                 )
                 session.add(slot)
                 slot_count += 1
-        print(f"✅ Seeded {slot_count} timetable slots.")
+        print(f"Seeded {slot_count} timetable slots.")
 
         # 4. Seed Exams (Course-wide)
         exam_count = 0
@@ -111,7 +111,7 @@ def seed_data():
             )
             session.add(upcoming_exam)
             exam_count += 1
-        print(f"✅ Seeded {exam_count} exams.")
+        print(f"Seeded {exam_count} exams.")
 
         session.commit()
 
@@ -232,9 +232,9 @@ def seed_data():
                 total_students += 1
 
         session.commit()
-        print(f"✅ Seeded {total_assignments} assignments for the top 10 students.")
+        print(f"Seeded {total_assignments} assignments for the top 10 students.")
         print("\n" + "="*30)
-        print("🎉 UI-CENTRIC MOCK DATA SEEDING COMPLETE")
+        print("UI-CENTRIC MOCK DATA SEEDING COMPLETE")
         print("="*30)
         print(f"Total Students: {total_students}")
         for tier, count in counts.items():

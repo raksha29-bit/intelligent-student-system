@@ -122,7 +122,7 @@ export default function Dashboard() {
     }
   }, [isAuthenticated, currentUserId]);
 
-  const isRiskFound = DEMO_FORCE_RISK || riskData?.alert_trigger;
+  const riskLevel = riskData?.riskLevel || (DEMO_FORCE_RISK ? "CRITICAL" : "SAFE");
 
   useEffect(() => {
     if (isAuthenticated && currentUserId) {
@@ -634,34 +634,57 @@ export default function Dashboard() {
               {/* 50/50 Split: Risk Radar & Record Mark */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
                  {/* Risk Radar */}
-                 <div className={`p-8 rounded-3xl shadow-sm border transition-all duration-500 ${isRiskFound ? 'bg-red-50/80 dark:bg-red-950/20 border-red-200 dark:border-red-500/30 shadow-red-500/10' : 'bg-white dark:bg-slate-900 border-slate-200 dark:border-white/10'}`}>
+                 <div className={`p-8 rounded-3xl shadow-sm border transition-all duration-500 ${
+                    riskLevel === 'CRITICAL' ? 'bg-red-50/80 dark:bg-red-950/20 border-red-200 dark:border-red-500/30 shadow-red-500/10' :
+                    riskLevel === 'WARNING' ? 'bg-orange-50/80 dark:bg-orange-950/20 border-orange-200 dark:border-orange-500/30 shadow-orange-500/10' :
+                    'bg-emerald-50/80 dark:bg-emerald-950/20 border-emerald-200 dark:border-emerald-500/30 shadow-emerald-500/10'
+                  }`}>
                     <div className="flex justify-between items-center mb-6">
-                      <h4 className={`font-headline text-xl font-bold tracking-tight flex items-center gap-2 ${isRiskFound ? 'text-red-700 dark:text-red-400' : 'text-slate-800 dark:text-gray-100'}`}>
+                      <h4 className={`font-headline text-xl font-bold tracking-tight flex items-center gap-2 ${
+                        riskLevel === 'CRITICAL' ? 'text-red-700 dark:text-red-400' :
+                        riskLevel === 'WARNING' ? 'text-orange-700 dark:text-orange-400' :
+                        'text-emerald-700 dark:text-emerald-400'
+                      }`}>
                         <span className="material-symbols-outlined">radar</span> Risk Radar
                       </h4>
-                      {isRiskFound ? (
+                      {riskLevel === 'CRITICAL' && (
                         <div className="bg-red-500 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest animate-pulse">
                           CRITICAL
                         </div>
-                      ) : (
+                      )}
+                      {riskLevel === 'WARNING' && (
+                        <div className="bg-orange-500 text-white text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest animate-pulse">
+                          WARNING
+                        </div>
+                      )}
+                      {riskLevel === 'SAFE' && (
                         <div className="bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 text-[10px] font-bold px-3 py-1 rounded-full uppercase tracking-widest border border-emerald-200 dark:border-emerald-500/30">
-                          Stable
+                          ON TRACK
                         </div>
                       )}
                     </div>
                     
-                    <p className={`text-sm leading-relaxed mb-6 ${isRiskFound ? 'text-red-900/80 dark:text-red-200/80 font-medium' : 'text-slate-600 dark:text-slate-400'}`}>
-                      {isRiskFound ? 
-                        (DEMO_FORCE_RISK ? "CRITICAL: Multiple modules are currently below passing trajectory. Immediate curriculum intervention is recommended to recover academic standing." : riskData?.details) 
-                        : 'Analyzing curriculum velocity models. No significant risk detected across enrolled modules.'}
+                    <p className={`text-sm leading-relaxed mb-6 font-medium ${
+                      riskLevel === 'CRITICAL' ? 'text-red-900/80 dark:text-red-200/80' :
+                      riskLevel === 'WARNING' ? 'text-orange-900/80 dark:text-orange-200/80' :
+                      'text-emerald-900/80 dark:text-emerald-200/80'
+                    }`}>
+                      {riskLevel === 'CRITICAL' && (DEMO_FORCE_RISK ? "CRITICAL: Multiple modules are currently below passing trajectory. Immediate curriculum intervention is recommended to recover academic standing." : riskData?.details || "Multiple modules are below passing trajectory.")}
+                      {riskLevel === 'WARNING' && "Some modules require attention."}
+                      {riskLevel === 'SAFE' && "Academic trajectory is stable. Keep up the good work!"}
                     </p>
                     
-                    {isRiskFound && (
+                    {riskLevel !== 'SAFE' && (
                         <button 
                           onClick={triggerResolveFlow} 
-                          className="group relative w-full overflow-hidden rounded-2xl bg-linear-to-r from-red-600 to-orange-600 p-[1.5px] transition-all hover:scale-[1.02] active:scale-95 shadow-lg shadow-red-600/30"
+                          className={`group relative w-full overflow-hidden rounded-2xl p-[1.5px] transition-all hover:scale-[1.02] active:scale-95 shadow-lg ${
+                            riskLevel === 'CRITICAL' ? 'bg-linear-to-r from-red-600 to-orange-600 shadow-red-600/30' :
+                            'bg-linear-to-r from-orange-500 to-amber-500 shadow-orange-500/30'
+                          }`}
                         >
-                            <div className="relative flex items-center justify-center gap-3 bg-red-600 px-6 py-4 rounded-[14px] transition-colors group-hover:bg-transparent">
+                            <div className={`relative flex items-center justify-center gap-3 px-6 py-4 rounded-[14px] transition-colors group-hover:bg-transparent ${
+                              riskLevel === 'CRITICAL' ? 'bg-red-600' : 'bg-orange-500'
+                            }`}>
                                 <span className="material-symbols-outlined text-white text-[20px] animate-spin-slow">auto_awesome</span>
                                 <span className="font-bold text-white text-sm">Generate Resolve Roadmap ✨</span>
                             </div>

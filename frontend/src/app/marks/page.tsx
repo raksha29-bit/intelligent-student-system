@@ -11,6 +11,8 @@ export default function MarksPage() {
   const [marksData, setMarksData] = useState<any[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [expandedRows, setExpandedRows] = useState<Set<number>>(new Set());
+  const [predictedSgpa, setPredictedSgpa] = useState<number | null>(null);
+  const [isPredicting, setIsPredicting] = useState(false);
 
   const toggleRow = (id: number) => {
     setExpandedRows(prev => {
@@ -52,6 +54,21 @@ export default function MarksPage() {
     }
   };
 
+  const handlePredictSgpa = async () => {
+    setIsPredicting(true);
+    try {
+      const userId = localStorage.getItem('luminary_active_user') || '1';
+      const res = await fetch(`http://localhost:8000/api/risk/predict_sgpa/${userId}`);
+      const data = await res.json();
+      setPredictedSgpa(data.predicted_sgpa);
+    } catch (err) {
+      console.error("Failed to predict SGPA:", err);
+      setPredictedSgpa(0.0);
+    } finally {
+      setIsPredicting(false);
+    }
+  };
+
   useEffect(() => {
     setMounted(true);
     fetchMarks();
@@ -75,6 +92,29 @@ export default function MarksPage() {
            </div>
            
            <div className="flex items-center gap-4">
+             {predictedSgpa !== null && (
+               <div className="flex items-center bg-white/50 dark:bg-slate-800/50 border border-slate-200 dark:border-white/10 rounded-xl px-4 py-2 shadow-sm backdrop-blur-md">
+                 <span className="text-sm font-bold text-slate-500 dark:text-slate-400 mr-2 uppercase tracking-widest">Predicted SGPA:</span>
+                 <span className="text-xl font-extrabold bg-linear-to-r from-indigo-500 to-purple-600 bg-clip-text text-transparent">{predictedSgpa}</span>
+               </div>
+             )}
+             <button 
+               onClick={handlePredictSgpa}
+               disabled={isPredicting}
+               className="flex items-center gap-2 bg-linear-to-r from-indigo-500 via-purple-500 to-pink-500 text-white font-bold py-2.5 px-5 rounded-xl transition-all shadow-[0_0_15px_rgba(99,102,241,0.5)] hover:shadow-[0_0_25px_rgba(99,102,241,0.7)] hover:scale-105 disabled:opacity-70 disabled:hover:scale-100"
+             >
+               {isPredicting ? (
+                 <>
+                   <span className="material-symbols-outlined animate-spin text-[18px]">progress_activity</span>
+                   Calculating...
+                 </>
+               ) : (
+                 <>
+                   <span className="material-symbols-outlined text-[18px]">auto_awesome</span>
+                   Predict SGPA
+                 </>
+               )}
+             </button>
              <button onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')} className="w-10 h-10 p-2 flex items-center justify-center rounded-full bg-white dark:bg-slate-800 border border-slate-200 dark:border-white/10 hover:bg-slate-100 dark:hover:bg-slate-700 shadow-sm transition-colors text-slate-600 dark:text-slate-300">
                 <span className="material-symbols-outlined text-[20px]">{theme === 'dark' ? 'light_mode' : 'dark_mode'}</span>
              </button>
